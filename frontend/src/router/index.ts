@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import Dashboard from '@/pages/Dashboard.vue'
 import Placeholder from '@/pages/Placeholder.vue'
+import QueueList from '@/pages/QueueList.vue'
+import QueueDetail from '@/pages/QueueDetail.vue'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -16,8 +18,14 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/queues',
     name: 'Queues',
-    component: Placeholder,
+    component: QueueList,
     meta: { title: '队列管理', icon: 'List', featureName: '队列管理' },
+  },
+  {
+    path: '/queues/:name',
+    name: 'QueueDetail',
+    component: QueueDetail,
+    meta: { title: '队列详情', icon: 'List', featureName: '队列管理', hideInMenu: true },
   },
   {
     path: '/exchanges',

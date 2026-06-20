@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 import logging
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
+from urllib.parse import quote
 import base64
 import json
 import socket
@@ -258,6 +259,179 @@ class RabbitMQMonitor:
                 "port": conn.get("port", 5672),
                 "error": self._last_error if conn.get("status") == "disconnected" else None,
             }
+
+    def _get_vhost_encoded(self) -> str:
+        vhost = self._config.get("rabbitmq_vhost", "/")
+        return "%2F" if vhost == "/" else vhost
+
+    def list_queues(self) -> Optional[list[Dict[str, Any]]]:
+        vhost = self._get_vhost_encoded()
+        data = self._mgmt_request(f"/api/queues/{vhost}", timeout=3.0)
+        if data is None:
+            return None
+        result = []
+        for q in data:
+            messages_ready = q.get("messages_ready", 0)
+            messages_unacknowledged = q.get("messages_unacknowledged", 0)
+            messages_total = q.get("messages", 0)
+            consumers = q.get("consumers", 0)
+            status = "running" if consumers > 0 or messages_unacknowledged > 0 else "idle"
+            result.append({
+                "name": q.get("name", ""),
+                "ready": messages_ready,
+                "unacked": messages_unacknowledged,
+                "total": messages_total,
+                "consumers": consumers,
+                "status": status,
+                "vhost": q.get("vhost", "/"),
+                "durable": q.get("durable", False),
+                "auto_delete": q.get("auto_delete", False),
+                "exclusive": q.get("exclusive", False),
+                "node": q.get("node", ""),
+            })
+        return result
+
+    def get_queue_detail(self, queue_name: str) -> Optional[Dict[str, Any]]:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        data = self._mgmt_request(f"/api/queues/{vhost}/{queue_encoded}", timeout=3.0)
+        if data is None:
+            return None
+
+        bindings = self._mgmt_request(f"/api/queues/{vhost}/{queue_encoded}/bindings", timeout=3.0)
+        bindings_list = []
+        if bindings:
+            for b in bindings:
+                if b.get("source"):
+                    bindings_list.append({
+                        "exchange": b.get("source", ""),
+                        "routing_key": b.get("routing_key", ""),
+                        "destination": b.get("destination", ""),
+                        "destination_type": b.get("destination_type", ""),
+                        "arguments": b.get("arguments", {}),
+                    })
+
+        consumers_list = []
+        consumer_details = data.get("consumer_details", [])
+        if consumer_details:
+            for c in consumer_details:
+                consumers_list.append({
+                    "consumer_tag": c.get("consumer_tag", ""),
+                    "channel_details": c.get("channel_details", {}),
+                    "ack_required": c.get("ack_required", False),
+                    "exclusive": c.get("exclusive", False),
+                    "arguments": c.get("arguments", {}),
+                })
+
+        messages_ready = data.get("messages_ready", 0)
+        messages_unacknowledged = data.get("messages_unacknowledged", 0)
+        messages_total = data.get("messages", 0)
+        consumers = data.get("consumers", 0)
+        status = "running" if consumers > 0 or messages_unacknowledged > 0 else "idle"
+
+        return {
+            "name": data.get("name", ""),
+            "vhost": data.get("vhost", "/"),
+            "durable": data.get("durable", False),
+            "auto_delete": data.get("auto_delete", False),
+            "exclusive": data.get("exclusive", False),
+            "arguments": data.get("arguments", {}),
+            "ready": messages_ready,
+            "unacked": messages_unacknowledged,
+            "total": messages_total,
+            "consumers": consumers,
+            "status": status,
+            "node": data.get("node", ""),
+            "state": data.get("state", ""),
+            "bindings": bindings_list,
+            "consumer_list": consumers_list,
+            "message_stats": data.get("message_stats", {}),
+            "memory": data.get("memory", 0),
+            "policy": data.get("policy", ""),
+        }
+
+    def create_queue(
+        self,
+        queue_name: str,
+        durable: bool = True,
+        auto_delete: bool = False,
+        exclusive: bool = False,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        url = f"/api/queues/{vhost}/{queue_encoded}"
+        body = {
+            "durable": durable,
+            "auto_delete": auto_delete,
+            "exclusive": exclusive,
+            "arguments": arguments or {},
+        }
+        return self._mgmt_request_put(url, body, timeout=3.0)
+
+    def purge_queue(self, queue_name: str) -> bool:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        url = f"/api/queues/{vhost}/{queue_encoded}/contents"
+        return self._mgmt_request_delete(url, timeout=3.0)
+
+    def delete_queue(self, queue_name: str, if_unused: bool = False, if_empty: bool = False) -> bool:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        params = []
+        if if_unused:
+            params.append("if-unused=true")
+        if if_empty:
+            params.append("if-empty=true")
+        url = f"/api/queues/{vhost}/{queue_encoded}"
+        if params:
+            url += "?" + "&".join(params)
+        return self._mgmt_request_delete(url, timeout=3.0)
+
+    def _mgmt_request_put(self, path: str, body: Dict[str, Any], timeout: float = 2.0) -> bool:
+        try:
+            host = self._config.get("rabbitmq_host", "localhost")
+            mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
+            username = self._config.get("rabbitmq_username", "admin")
+            password = self._config.get("rabbitmq_password", "admin123")
+            url = f"http://{host}:{mgmt_port}{path}"
+            auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+            data = json.dumps(body).encode()
+            req = Request(
+                url,
+                data=data,
+                headers={
+                    "Authorization": f"Basic {auth}",
+                    "Content-Type": "application/json",
+                },
+                method="PUT",
+            )
+            with urlopen(req, timeout=timeout) as resp:
+                return 200 <= resp.status < 300
+        except Exception as e:
+            logger.debug(f"Management API PUT failed for {path}: {e}")
+            return False
+
+    def _mgmt_request_delete(self, path: str, timeout: float = 2.0) -> bool:
+        try:
+            host = self._config.get("rabbitmq_host", "localhost")
+            mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
+            username = self._config.get("rabbitmq_username", "admin")
+            password = self._config.get("rabbitmq_password", "admin123")
+            url = f"http://{host}:{mgmt_port}{path}"
+            auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+            req = Request(
+                url,
+                headers={
+                    "Authorization": f"Basic {auth}",
+                },
+                method="DELETE",
+            )
+            with urlopen(req, timeout=timeout) as resp:
+                return 200 <= resp.status < 300
+        except Exception as e:
+            logger.debug(f"Management API DELETE failed for {path}: {e}")
+            return False
 
 
 monitor = RabbitMQMonitor()
