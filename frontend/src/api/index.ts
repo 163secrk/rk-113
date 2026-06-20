@@ -192,4 +192,88 @@ export const deleteQueue = (queueName: string, ifUnused = false, ifEmpty = false
   )
 }
 
+export interface ExchangeListItem {
+  name: string
+  vhost: string
+  type: 'direct' | 'topic' | 'fanout' | 'headers'
+  durable: boolean
+  auto_delete: boolean
+  internal: boolean
+}
+
+export interface ExchangeBinding {
+  source: string
+  destination: string
+  destination_type: string
+  routing_key: string
+  arguments: Record<string, unknown>
+  properties_key?: string
+}
+
+export interface ExchangeDetail {
+  name: string
+  vhost: string
+  type: 'direct' | 'topic' | 'fanout' | 'headers'
+  durable: boolean
+  auto_delete: boolean
+  internal: boolean
+  arguments: Record<string, unknown>
+  bindings: ExchangeBinding[]
+}
+
+export interface CreateExchangeRequest {
+  name: string
+  type?: 'direct' | 'topic' | 'fanout' | 'headers'
+  durable?: boolean
+  auto_delete?: boolean
+  internal?: boolean
+  arguments?: Record<string, unknown>
+}
+
+export interface CreateBindingRequest {
+  destination: string
+  destination_type?: string
+  routing_key?: string
+  arguments?: Record<string, unknown>
+}
+
+export const getExchanges = () =>
+  api.get<unknown, ExchangeListItem[]>('/rabbitmq/exchanges')
+
+export const getExchangeDetail = (exchangeName: string) =>
+  api.get<unknown, ExchangeDetail>(`/rabbitmq/exchanges/${encodeURIComponent(exchangeName)}`)
+
+export const createExchange = (data: CreateExchangeRequest) =>
+  api.post<unknown, OperationResponse>('/rabbitmq/exchanges', data)
+
+export const deleteExchange = (exchangeName: string, ifUnused = false) => {
+  const params = new URLSearchParams()
+  if (ifUnused) params.append('if_unused', 'true')
+  const query = params.toString()
+  return api.delete<unknown, OperationResponse>(
+    `/rabbitmq/exchanges/${encodeURIComponent(exchangeName)}${query ? `?${query}` : ''}`
+  )
+}
+
+export const createBinding = (exchangeName: string, data: CreateBindingRequest) =>
+  api.post<unknown, OperationResponse>(
+    `/rabbitmq/exchanges/${encodeURIComponent(exchangeName)}/bindings`,
+    data
+  )
+
+export const deleteBinding = (
+  exchangeName: string,
+  destination: string,
+  destinationType = 'queue',
+  propertiesKey = ''
+) => {
+  const params = new URLSearchParams()
+  params.append('destination', destination)
+  params.append('destination_type', destinationType)
+  if (propertiesKey) params.append('properties_key', propertiesKey)
+  return api.delete<unknown, OperationResponse>(
+    `/rabbitmq/exchanges/${encodeURIComponent(exchangeName)}/bindings?${params.toString()}`
+  )
+}
+
 export default api

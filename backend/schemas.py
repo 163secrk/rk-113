@@ -122,3 +122,48 @@ class CreateQueueRequest(BaseModel):
 class OperationResponse(BaseModel):
     success: bool
     message: str
+
+
+class ExchangeListItem(BaseModel):
+    name: str
+    vhost: str
+    type: str
+    durable: bool
+    auto_delete: bool
+    internal: bool
+
+
+class ExchangeBinding(BaseModel):
+    source: str
+    destination: str
+    destination_type: str
+    routing_key: str
+    arguments: Dict[str, Any]
+    properties_key: Optional[str] = None
+
+
+class ExchangeDetail(BaseModel):
+    name: str
+    vhost: str
+    type: str
+    durable: bool
+    auto_delete: bool
+    internal: bool
+    arguments: Dict[str, Any]
+    bindings: List[ExchangeBinding]
+
+
+class CreateExchangeRequest(BaseModel):
+    name: str
+    type: str = "direct"
+    durable: Optional[bool] = True
+    auto_delete: Optional[bool] = False
+    internal: Optional[bool] = False
+    arguments: Optional[Dict[str, Any]] = None
+
+
+class CreateBindingRequest(BaseModel):
+    destination: str
+    destination_type: Optional[str] = "queue"
+    routing_key: Optional[str] = ""
+    arguments: Optional[Dict[str, Any]] = None

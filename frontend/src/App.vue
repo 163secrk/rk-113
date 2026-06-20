@@ -143,7 +143,7 @@ onMounted(() => {
 
       <main class="flex-1 overflow-auto bg-grid p-6 animate-fade-in">
         <router-view v-slot="{ Component }">
-          <keep-alive :include="['QueueList', 'QueueDetail']">
+          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail']">
             <component :is="Component" />
           </keep-alive>
         </router-view>

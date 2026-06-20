@@ -495,4 +495,179 @@ class RabbitMQMonitor:
                 return False
 
 
+    def list_exchanges(self) -> Optional[list[Dict[str, Any]]]:
+        vhost = self._get_vhost_encoded()
+        data = self._mgmt_request(f"/api/exchanges/{vhost}", timeout=8.0, retries=1)
+        if data is None:
+            return None
+        result = []
+        for e in data:
+            result.append({
+                "name": e.get("name", ""),
+                "vhost": e.get("vhost", "/"),
+                "type": e.get("type", "direct"),
+                "durable": e.get("durable", False),
+                "auto_delete": e.get("auto_delete", False),
+                "internal": e.get("internal", False),
+            })
+        return result
+
+    def get_exchange_detail(self, exchange_name: str) -> Optional[Dict[str, Any]]:
+        vhost = self._get_vhost_encoded()
+        exchange_encoded = quote(exchange_name, safe="")
+        base_path = f"/api/exchanges/{vhost}/{exchange_encoded}"
+
+        def _fetch(path: str) -> Optional[Dict[str, Any]]:
+            return self._mgmt_request(path, timeout=6.0, retries=1)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_to_path = {
+                executor.submit(_fetch, base_path): "exchange",
+                executor.submit(_fetch, f"{base_path}/bindings/source"): "bindings",
+            }
+            results: Dict[str, Any] = {}
+            try:
+                for future in as_completed(future_to_path, timeout=15.0):
+                    path_key = future_to_path[future]
+                    try:
+                        results[path_key] = future.result()
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch {path_key}: {e}")
+                        results[path_key] = None
+            except TimeoutError:
+                logger.debug(f"Timeout fetching exchange detail for {exchange_name}, returning partial data")
+                for path_key, future in future_to_path.items():
+                    if path_key not in results:
+                        if future.done():
+                            try:
+                                results[path_key] = future.result()
+                            except Exception:
+                                results[path_key] = None
+                        else:
+                            results[path_key] = None
+                            future.cancel()
+
+        data = results.get("exchange")
+        if data is None:
+            return None
+
+        bindings = results.get("bindings")
+        bindings_list = []
+        if bindings and isinstance(bindings, list):
+            for b in bindings:
+                bindings_list.append({
+                    "source": b.get("source", ""),
+                    "destination": b.get("destination", ""),
+                    "destination_type": b.get("destination_type", ""),
+                    "routing_key": b.get("routing_key", ""),
+                    "arguments": b.get("arguments", {}),
+                    "properties_key": b.get("properties_key", ""),
+                })
+
+        return {
+            "name": data.get("name", ""),
+            "vhost": data.get("vhost", "/"),
+            "type": data.get("type", "direct"),
+            "durable": data.get("durable", False),
+            "auto_delete": data.get("auto_delete", False),
+            "internal": data.get("internal", False),
+            "arguments": data.get("arguments", {}),
+            "bindings": bindings_list,
+        }
+
+    def create_exchange(
+        self,
+        exchange_name: str,
+        exchange_type: str = "direct",
+        durable: bool = True,
+        auto_delete: bool = False,
+        internal: bool = False,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        vhost = self._get_vhost_encoded()
+        exchange_encoded = quote(exchange_name, safe="")
+        url = f"/api/exchanges/{vhost}/{exchange_encoded}"
+        body = {
+            "type": exchange_type,
+            "durable": durable,
+            "auto_delete": auto_delete,
+            "internal": internal,
+            "arguments": arguments or {},
+        }
+        return self._mgmt_request_put(url, body, timeout=6.0, retries=1)
+
+    def delete_exchange(self, exchange_name: str, if_unused: bool = False) -> bool:
+        vhost = self._get_vhost_encoded()
+        exchange_encoded = quote(exchange_name, safe="")
+        params = []
+        if if_unused:
+            params.append("if-unused=true")
+        url = f"/api/exchanges/{vhost}/{exchange_encoded}"
+        if params:
+            url += "?" + "&".join(params)
+        return self._mgmt_request_delete(url, timeout=6.0, retries=1)
+
+    def create_binding(
+        self,
+        exchange_name: str,
+        destination: str,
+        destination_type: str = "queue",
+        routing_key: str = "",
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        vhost = self._get_vhost_encoded()
+        exchange_encoded = quote(exchange_name, safe="")
+        destination_encoded = quote(destination, safe="")
+        url = f"/api/bindings/{vhost}/e/{exchange_encoded}/{destination_type}/{destination_encoded}"
+        body = {
+            "routing_key": routing_key,
+            "arguments": arguments or {},
+        }
+        return self._mgmt_request_post(url, body, timeout=6.0, retries=1)
+
+    def delete_binding(
+        self,
+        exchange_name: str,
+        destination: str,
+        destination_type: str = "queue",
+        properties_key: str = "",
+    ) -> bool:
+        vhost = self._get_vhost_encoded()
+        exchange_encoded = quote(exchange_name, safe="")
+        destination_encoded = quote(destination, safe="")
+        props_encoded = quote(properties_key, safe="")
+        url = f"/api/bindings/{vhost}/e/{exchange_encoded}/{destination_type}/{destination_encoded}/{props_encoded}"
+        return self._mgmt_request_delete(url, timeout=6.0, retries=1)
+
+    def _mgmt_request_post(self, path: str, body: Dict[str, Any], timeout: float = 5.0, retries: int = 1) -> bool:
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                host = self._get_host()
+                mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
+                username = self._config.get("rabbitmq_username", "admin")
+                password = self._config.get("rabbitmq_password", "admin123")
+                url = f"http://{host}:{mgmt_port}{path}"
+                auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+                data = json.dumps(body).encode()
+                req = Request(
+                    url,
+                    data=data,
+                    headers={
+                        "Authorization": f"Basic {auth}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                with urlopen(req, timeout=timeout) as resp:
+                    return 200 <= resp.status < 300
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                logger.debug(f"Management API POST failed for {path} after {retries + 1} attempts: {e}")
+                return False
+
+
 monitor = RabbitMQMonitor()

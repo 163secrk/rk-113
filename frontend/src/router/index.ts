@@ -3,6 +3,8 @@ import Dashboard from '@/pages/Dashboard.vue'
 import Placeholder from '@/pages/Placeholder.vue'
 import QueueList from '@/pages/QueueList.vue'
 import QueueDetail from '@/pages/QueueDetail.vue'
+import ExchangeList from '@/pages/ExchangeList.vue'
+import ExchangeDetail from '@/pages/ExchangeDetail.vue'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -30,8 +32,14 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/exchanges',
     name: 'Exchanges',
-    component: Placeholder,
+    component: ExchangeList,
     meta: { title: '交换机管理', icon: 'Share2', featureName: '交换机管理' },
+  },
+  {
+    path: '/exchanges/:name',
+    name: 'ExchangeDetail',
+    component: ExchangeDetail,
+    meta: { title: '交换机详情', icon: 'Share2', featureName: '交换机管理', hideInMenu: true },
   },
   {
     path: '/messages',
