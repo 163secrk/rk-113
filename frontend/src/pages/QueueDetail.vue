@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   RefreshCw,
@@ -23,34 +23,74 @@ import {
   type QueueDetail,
 } from '@/api'
 
+defineOptions({
+  name: 'QueueDetail',
+})
+
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
 const queueDetail = ref<QueueDetail | null>(null)
 const lastUpdated = ref<Date | null>(null)
 let refreshTimer: number | null = null
+let isActive = false
+let isFetching = false
+let hasLoaded = false
+let currentQueueName = ''
 
 const queueName = computed(() => {
   const name = route.params.name as string
   return decodeURIComponent(name)
 })
 
-async function fetchData() {
+
+
+async function fetchData(forceRefresh: boolean | Event = false) {
+  const isForce = typeof forceRefresh === 'boolean' ? forceRefresh : false
+  if (isFetching && !isForce) return
+  if (!isActive) return
+
+  const name = queueName.value
+  currentQueueName = name
+
   try {
-    loading.value = true
-    const data = await getQueueDetail(queueName.value)
+    isFetching = true
+    if (!hasLoaded || isForce) {
+      loading.value = true
+    }
+    const data = await getQueueDetail(name)
+    if (currentQueueName !== name) return
     queueDetail.value = data
     lastUpdated.value = new Date()
+    hasLoaded = true
   } catch (err: any) {
+    if (currentQueueName !== name) return
     console.error('Failed to fetch queue detail:', err)
     if (err.response?.status === 404) {
-      ElMessage.error(`队列 "${queueName.value}" 不存在`)
+      ElMessage.error(`队列 "${name}" 不存在`)
       router.push('/queues')
-    } else {
-      ElMessage.error('获取队列详情失败')
     }
   } finally {
-    loading.value = false
+    if (currentQueueName === name) {
+      loading.value = false
+      isFetching = false
+    }
+  }
+}
+
+function startRefreshTimer() {
+  if (refreshTimer) return
+  refreshTimer = window.setInterval(() => {
+    if (isActive) {
+      fetchData()
+    }
+  }, 10000)
+}
+
+function stopRefreshTimer() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
   }
 }
 
@@ -126,12 +166,31 @@ function getStatusClass(status: string): string {
 }
 
 onMounted(() => {
+  isActive = true
+  currentQueueName = queueName.value
   fetchData()
-  refreshTimer = window.setInterval(fetchData, 5000)
+  startRefreshTimer()
+})
+
+onActivated(() => {
+  isActive = true
+  if (currentQueueName !== queueName.value || !hasLoaded) {
+    currentQueueName = queueName.value
+    hasLoaded = false
+    queueDetail.value = null
+    fetchData(true)
+  }
+  startRefreshTimer()
+})
+
+onDeactivated(() => {
+  isActive = false
+  stopRefreshTimer()
 })
 
 onBeforeUnmount(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
+  isActive = false
+  stopRefreshTimer()
 })
 </script>
 

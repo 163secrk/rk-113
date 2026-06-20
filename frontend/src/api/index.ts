@@ -1,8 +1,47 @@
-import axios from 'axios'
+import axios, { type AxiosRequestConfig } from 'axios'
+import { ElMessage } from 'element-plus'
+
+const errorMessageCache = new Map<string, number>()
+const ERROR_DEBOUNCE_MS = 10000
+
+function showErrorDebounced(message: string) {
+  const now = Date.now()
+  const lastShown = errorMessageCache.get(message) || 0
+  if (now - lastShown < ERROR_DEBOUNCE_MS) {
+    return
+  }
+  errorMessageCache.set(message, now)
+  ElMessage.error({
+    message,
+    duration: 3000,
+    showClose: true,
+  })
+}
+
+async function requestWithRetry<T>(
+  config: AxiosRequestConfig,
+  retries: number = 1,
+  retryDelay: number = 500
+): Promise<T> {
+  let lastError: unknown
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const response = await api.request<T>(config)
+      return response.data as T
+    } catch (err) {
+      lastError = err
+      if (i < retries) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelay * (i + 1)))
+        continue
+      }
+    }
+  }
+  throw lastError
+}
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 10000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -12,6 +51,21 @@ api.interceptors.response.use(
   (res) => res.data,
   (err) => {
     console.error('API Error:', err)
+    const url = err.config?.url || ''
+    const status = err.response?.status
+    let errorMsg = '请求失败，请稍后重试'
+    if (status === 404) {
+      errorMsg = '请求的资源不存在'
+    } else if (status === 500) {
+      errorMsg = '服务器内部错误'
+    } else if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+      errorMsg = '请求超时，请检查网络连接'
+    } else if (err.message?.includes('Network Error')) {
+      errorMsg = '网络连接失败，请检查后端服务'
+    }
+    if (!url.includes('/health') && !url.includes('/connection/status')) {
+      showErrorDebounced(errorMsg)
+    }
     return Promise.reject(err)
   }
 )

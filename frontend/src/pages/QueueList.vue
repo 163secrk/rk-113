@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   RefreshCw,
@@ -22,11 +22,18 @@ import {
   type CreateQueueRequest,
 } from '@/api'
 
+defineOptions({
+  name: 'QueueList',
+})
+
 const router = useRouter()
 const loading = ref(false)
 const queues = ref<QueueListItem[]>([])
 const lastUpdated = ref<Date | null>(null)
 let refreshTimer: number | null = null
+let isActive = false
+let isFetching = false
+let hasLoaded = false
 
 const createDialogVisible = ref(false)
 const createForm = ref<CreateQueueRequest>({
@@ -39,17 +46,41 @@ const createForm = ref<CreateQueueRequest>({
 
 const argumentsInput = ref('')
 
-async function fetchData() {
+async function fetchData(forceRefresh: boolean | Event = false) {
+  const isForce = typeof forceRefresh === 'boolean' ? forceRefresh : false
+  if (isFetching && !isForce) return
+  if (!isActive) return
+
   try {
-    loading.value = true
+    isFetching = true
+    if (!hasLoaded || isForce) {
+      loading.value = true
+    }
     const data = await getQueues()
     queues.value = data
     lastUpdated.value = new Date()
+    hasLoaded = true
   } catch (err) {
     console.error('Failed to fetch queues:', err)
-    ElMessage.error('获取队列列表失败')
   } finally {
     loading.value = false
+    isFetching = false
+  }
+}
+
+function startRefreshTimer() {
+  if (refreshTimer) return
+  refreshTimer = window.setInterval(() => {
+    if (isActive) {
+      fetchData()
+    }
+  }, 10000)
+}
+
+function stopRefreshTimer() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
   }
 }
 
@@ -161,12 +192,27 @@ function getStatusDotClass(status: string): string {
 }
 
 onMounted(() => {
+  isActive = true
   fetchData()
-  refreshTimer = window.setInterval(fetchData, 5000)
+  startRefreshTimer()
+})
+
+onActivated(() => {
+  isActive = true
+  if (!hasLoaded) {
+    fetchData()
+  }
+  startRefreshTimer()
+})
+
+onDeactivated(() => {
+  isActive = false
+  stopRefreshTimer()
 })
 
 onBeforeUnmount(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
+  isActive = false
+  stopRefreshTimer()
 })
 </script>
 

@@ -9,6 +9,7 @@ from urllib.parse import quote
 import base64
 import json
 import socket
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,21 +44,27 @@ class RabbitMQMonitor:
         mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
         return f"http://{host}:{mgmt_port}"
 
-    def _mgmt_request(self, path: str, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
-        try:
-            host = self._config.get("rabbitmq_host", "localhost")
-            mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
-            username = self._config.get("rabbitmq_username", "admin")
-            password = self._config.get("rabbitmq_password", "admin123")
-            url = f"http://{host}:{mgmt_port}{path}"
-            auth = base64.b64encode(f"{username}:{password}".encode()).decode()
-            req = Request(url, headers={"Authorization": f"Basic {auth}"})
-            with urlopen(req, timeout=timeout) as resp:
-                data = resp.read().decode()
-                return json.loads(data)
-        except (URLError, HTTPError, TimeoutError, json.JSONDecodeError, socket.timeout, OSError) as e:
-            logger.debug(f"Management API request failed for {path}: {e}")
-            return None
+    def _mgmt_request(self, path: str, timeout: float = 5.0, retries: int = 2) -> Optional[Dict[str, Any]]:
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                host = self._config.get("rabbitmq_host", "localhost")
+                mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
+                username = self._config.get("rabbitmq_username", "admin")
+                password = self._config.get("rabbitmq_password", "admin123")
+                url = f"http://{host}:{mgmt_port}{path}"
+                auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+                req = Request(url, headers={"Authorization": f"Basic {auth}"})
+                with urlopen(req, timeout=timeout) as resp:
+                    data = resp.read().decode()
+                    return json.loads(data)
+            except (URLError, HTTPError, TimeoutError, json.JSONDecodeError, socket.timeout, OSError) as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                logger.debug(f"Management API request failed for {path} after {retries + 1} attempts: {e}")
+                return None
 
     def set_config(self, config: Dict[str, str]) -> None:
         with self._lock:
@@ -266,7 +273,7 @@ class RabbitMQMonitor:
 
     def list_queues(self) -> Optional[list[Dict[str, Any]]]:
         vhost = self._get_vhost_encoded()
-        data = self._mgmt_request(f"/api/queues/{vhost}", timeout=3.0)
+        data = self._mgmt_request(f"/api/queues/{vhost}", timeout=8.0, retries=1)
         if data is None:
             return None
         result = []
@@ -294,11 +301,43 @@ class RabbitMQMonitor:
     def get_queue_detail(self, queue_name: str) -> Optional[Dict[str, Any]]:
         vhost = self._get_vhost_encoded()
         queue_encoded = quote(queue_name, safe="")
-        data = self._mgmt_request(f"/api/queues/{vhost}/{queue_encoded}", timeout=3.0)
+        base_path = f"/api/queues/{vhost}/{queue_encoded}"
+
+        def _fetch(path: str) -> Optional[Dict[str, Any]]:
+            return self._mgmt_request(path, timeout=6.0, retries=1)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_path = {
+                executor.submit(_fetch, base_path): "queue",
+                executor.submit(_fetch, f"{base_path}/bindings"): "bindings",
+            }
+            results: Dict[str, Any] = {}
+            try:
+                for future in as_completed(future_to_path, timeout=15.0):
+                    path_key = future_to_path[future]
+                    try:
+                        results[path_key] = future.result()
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch {path_key}: {e}")
+                        results[path_key] = None
+            except TimeoutError:
+                logger.debug(f"Timeout fetching queue detail for {queue_name}, returning partial data")
+                for path_key, future in future_to_path.items():
+                    if path_key not in results:
+                        if future.done():
+                            try:
+                                results[path_key] = future.result()
+                            except Exception:
+                                results[path_key] = None
+                        else:
+                            results[path_key] = None
+                            future.cancel()
+
+        data = results.get("queue")
         if data is None:
             return None
 
-        bindings = self._mgmt_request(f"/api/queues/{vhost}/{queue_encoded}/bindings", timeout=3.0)
+        bindings = results.get("bindings")
         bindings_list = []
         if bindings:
             for b in bindings:
@@ -367,13 +406,13 @@ class RabbitMQMonitor:
             "exclusive": exclusive,
             "arguments": arguments or {},
         }
-        return self._mgmt_request_put(url, body, timeout=3.0)
+        return self._mgmt_request_put(url, body, timeout=6.0, retries=1)
 
     def purge_queue(self, queue_name: str) -> bool:
         vhost = self._get_vhost_encoded()
         queue_encoded = quote(queue_name, safe="")
         url = f"/api/queues/{vhost}/{queue_encoded}/contents"
-        return self._mgmt_request_delete(url, timeout=3.0)
+        return self._mgmt_request_delete(url, timeout=6.0, retries=1)
 
     def delete_queue(self, queue_name: str, if_unused: bool = False, if_empty: bool = False) -> bool:
         vhost = self._get_vhost_encoded()
@@ -386,52 +425,64 @@ class RabbitMQMonitor:
         url = f"/api/queues/{vhost}/{queue_encoded}"
         if params:
             url += "?" + "&".join(params)
-        return self._mgmt_request_delete(url, timeout=3.0)
+        return self._mgmt_request_delete(url, timeout=6.0, retries=1)
 
-    def _mgmt_request_put(self, path: str, body: Dict[str, Any], timeout: float = 2.0) -> bool:
-        try:
-            host = self._config.get("rabbitmq_host", "localhost")
-            mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
-            username = self._config.get("rabbitmq_username", "admin")
-            password = self._config.get("rabbitmq_password", "admin123")
-            url = f"http://{host}:{mgmt_port}{path}"
-            auth = base64.b64encode(f"{username}:{password}".encode()).decode()
-            data = json.dumps(body).encode()
-            req = Request(
-                url,
-                data=data,
-                headers={
-                    "Authorization": f"Basic {auth}",
-                    "Content-Type": "application/json",
-                },
-                method="PUT",
-            )
-            with urlopen(req, timeout=timeout) as resp:
-                return 200 <= resp.status < 300
-        except Exception as e:
-            logger.debug(f"Management API PUT failed for {path}: {e}")
-            return False
+    def _mgmt_request_put(self, path: str, body: Dict[str, Any], timeout: float = 5.0, retries: int = 1) -> bool:
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                host = self._config.get("rabbitmq_host", "localhost")
+                mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
+                username = self._config.get("rabbitmq_username", "admin")
+                password = self._config.get("rabbitmq_password", "admin123")
+                url = f"http://{host}:{mgmt_port}{path}"
+                auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+                data = json.dumps(body).encode()
+                req = Request(
+                    url,
+                    data=data,
+                    headers={
+                        "Authorization": f"Basic {auth}",
+                        "Content-Type": "application/json",
+                    },
+                    method="PUT",
+                )
+                with urlopen(req, timeout=timeout) as resp:
+                    return 200 <= resp.status < 300
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                logger.debug(f"Management API PUT failed for {path} after {retries + 1} attempts: {e}")
+                return False
 
-    def _mgmt_request_delete(self, path: str, timeout: float = 2.0) -> bool:
-        try:
-            host = self._config.get("rabbitmq_host", "localhost")
-            mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
-            username = self._config.get("rabbitmq_username", "admin")
-            password = self._config.get("rabbitmq_password", "admin123")
-            url = f"http://{host}:{mgmt_port}{path}"
-            auth = base64.b64encode(f"{username}:{password}".encode()).decode()
-            req = Request(
-                url,
-                headers={
-                    "Authorization": f"Basic {auth}",
-                },
-                method="DELETE",
-            )
-            with urlopen(req, timeout=timeout) as resp:
-                return 200 <= resp.status < 300
-        except Exception as e:
-            logger.debug(f"Management API DELETE failed for {path}: {e}")
-            return False
+    def _mgmt_request_delete(self, path: str, timeout: float = 5.0, retries: int = 1) -> bool:
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                host = self._config.get("rabbitmq_host", "localhost")
+                mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
+                username = self._config.get("rabbitmq_username", "admin")
+                password = self._config.get("rabbitmq_password", "admin123")
+                url = f"http://{host}:{mgmt_port}{path}"
+                auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+                req = Request(
+                    url,
+                    headers={
+                        "Authorization": f"Basic {auth}",
+                    },
+                    method="DELETE",
+                )
+                with urlopen(req, timeout=timeout) as resp:
+                    return 200 <= resp.status < 300
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                logger.debug(f"Management API DELETE failed for {path} after {retries + 1} attempts: {e}")
+                return False
 
 
 monitor = RabbitMQMonitor()
