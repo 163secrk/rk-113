@@ -27,7 +27,7 @@ class RabbitMQMonitor:
         self._cached_overview: Dict[str, Any] = {
             "connection": {
                 "status": "connecting",
-                "host": "localhost",
+                "host": "127.0.0.1",
                 "port": 5672,
                 "uptime": None,
             },
@@ -39,8 +39,18 @@ class RabbitMQMonitor:
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+    @staticmethod
+    def _normalize_host(host: str) -> str:
+        if host.strip().lower() == "localhost":
+            return "127.0.0.1"
+        return host
+
+    def _get_host(self) -> str:
+        host = self._config.get("rabbitmq_host", "127.0.0.1")
+        return self._normalize_host(host)
+
     def _get_mgmt_url(self) -> str:
-        host = self._config.get("rabbitmq_host", "localhost")
+        host = self._get_host()
         mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
         return f"http://{host}:{mgmt_port}"
 
@@ -48,7 +58,7 @@ class RabbitMQMonitor:
         last_error = None
         for attempt in range(retries + 1):
             try:
-                host = self._config.get("rabbitmq_host", "localhost")
+                host = self._get_host()
                 mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
                 username = self._config.get("rabbitmq_username", "admin")
                 password = self._config.get("rabbitmq_password", "admin123")
@@ -75,8 +85,8 @@ class RabbitMQMonitor:
             new_port = self._config.get("rabbitmq_port")
             if old_host != new_host or old_port != new_port:
                 self._disconnect_locked()
-                self._cached_overview["connection"]["host"] = new_host or "localhost"
-                self._cached_overview["connection"]["port"] = int(new_port or 5672)
+            self._cached_overview["connection"]["host"] = self._normalize_host(new_host or "127.0.0.1")
+            self._cached_overview["connection"]["port"] = int(new_port or 5672)
 
     def _disconnect_locked(self) -> None:
         try:
@@ -96,7 +106,7 @@ class RabbitMQMonitor:
     def _connect_once(self) -> bool:
         self._disconnect_locked()
         try:
-            host = self._config.get("rabbitmq_host", "localhost")
+            host = self._get_host()
             port = int(self._config.get("rabbitmq_port", "5672"))
             username = self._config.get("rabbitmq_username", "admin")
             password = self._config.get("rabbitmq_password", "admin123")
@@ -210,7 +220,7 @@ class RabbitMQMonitor:
 
                     metrics = self._fetch_metrics()
 
-                    host = self._config.get("rabbitmq_host", "localhost")
+                    host = self._get_host()
                     port = int(self._config.get("rabbitmq_port", "5672"))
                     uptime = round(time.time() - self._connect_time, 2) if (self._connect_time and status == "connected") else None
 
@@ -431,7 +441,7 @@ class RabbitMQMonitor:
         last_error = None
         for attempt in range(retries + 1):
             try:
-                host = self._config.get("rabbitmq_host", "localhost")
+                host = self._get_host()
                 mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
                 username = self._config.get("rabbitmq_username", "admin")
                 password = self._config.get("rabbitmq_password", "admin123")
@@ -461,7 +471,7 @@ class RabbitMQMonitor:
         last_error = None
         for attempt in range(retries + 1):
             try:
-                host = self._config.get("rabbitmq_host", "localhost")
+                host = self._get_host()
                 mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
                 username = self._config.get("rabbitmq_username", "admin")
                 password = self._config.get("rabbitmq_password", "admin123")

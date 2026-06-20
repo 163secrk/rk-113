@@ -5,7 +5,7 @@ from typing import List, Optional
 
 
 DEFAULT_CONFIGS = [
-    {"config_key": "rabbitmq_host", "config_value": "localhost", "description": "RabbitMQ 主机地址"},
+    {"config_key": "rabbitmq_host", "config_value": "127.0.0.1", "description": "RabbitMQ 主机地址"},
     {"config_key": "rabbitmq_port", "config_value": "5672", "description": "RabbitMQ AMQP 端口"},
     {"config_key": "rabbitmq_username", "config_value": "admin", "description": "RabbitMQ 用户名"},
     {"config_key": "rabbitmq_password", "config_value": "admin123", "description": "RabbitMQ 密码"},
@@ -69,7 +69,10 @@ def get_rabbitmq_config(db: Session) -> dict:
         cfg = get_config_by_key(db, k)
         if cfg:
             result[k] = cfg.config_value
-    result.setdefault("rabbitmq_host", "localhost")
+    host = result.get("rabbitmq_host", "127.0.0.1")
+    if host.strip().lower() == "localhost":
+        host = "127.0.0.1"
+    result["rabbitmq_host"] = host
     result.setdefault("rabbitmq_port", "5672")
     result.setdefault("rabbitmq_username", "admin")
     result.setdefault("rabbitmq_password", "admin123")
