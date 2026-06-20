@@ -618,7 +618,8 @@ class RabbitMQMonitor:
         vhost = self._get_vhost_encoded()
         exchange_encoded = quote(exchange_name, safe="")
         destination_encoded = quote(destination, safe="")
-        url = f"/api/bindings/{vhost}/e/{exchange_encoded}/{destination_type}/{destination_encoded}"
+        type_short = "q" if destination_type == "queue" else "e"
+        url = f"/api/bindings/{vhost}/e/{exchange_encoded}/{type_short}/{destination_encoded}"
         body = {
             "routing_key": routing_key,
             "arguments": arguments or {},
@@ -636,7 +637,8 @@ class RabbitMQMonitor:
         exchange_encoded = quote(exchange_name, safe="")
         destination_encoded = quote(destination, safe="")
         props_encoded = quote(properties_key, safe="")
-        url = f"/api/bindings/{vhost}/e/{exchange_encoded}/{destination_type}/{destination_encoded}/{props_encoded}"
+        type_short = "q" if destination_type == "queue" else "e"
+        url = f"/api/bindings/{vhost}/e/{exchange_encoded}/{type_short}/{destination_encoded}/{props_encoded}"
         return self._mgmt_request_delete(url, timeout=6.0, retries=1)
 
     def _mgmt_request_post(self, path: str, body: Dict[str, Any], timeout: float = 5.0, retries: int = 1) -> bool:

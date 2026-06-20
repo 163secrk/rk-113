@@ -400,13 +400,6 @@ onBeforeUnmount(() => {
                 </h3>
                 <p class="text-xs text-ops-muted mt-0.5">交换机到队列的可视化绑定</p>
               </div>
-              <button
-                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ops-primary/15 border border-ops-primary/30 text-ops-primary text-xs font-medium hover:bg-ops-primary/25 transition-all duration-200"
-                @click="openBindingDialog"
-              >
-                <Plus class="w-3.5 h-3.5" />
-                新建绑定
-              </button>
             </div>
 
             <div v-if="exchangeDetail.bindings.length > 0" class="py-4">
@@ -480,14 +473,7 @@ onBeforeUnmount(() => {
 
             <div v-else class="py-12 text-center">
               <Link2 class="w-12 h-12 text-ops-muted/30 mx-auto mb-3" />
-              <div class="text-ops-muted text-sm mb-4">暂无绑定关系</div>
-              <button
-                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-ops-primary/15 border border-ops-primary/30 text-ops-primary text-sm font-medium hover:bg-ops-primary/25 transition-all duration-200"
-                @click="openBindingDialog"
-              >
-                <Plus class="w-4 h-4" />
-                创建第一个绑定
-              </button>
+              <div class="text-ops-muted text-sm">暂无绑定关系，请在下方绑定列表中创建</div>
             </div>
           </div>
 
