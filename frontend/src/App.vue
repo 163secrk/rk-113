@@ -6,6 +6,7 @@ import {
   List,
   Share2,
   MessageSquare,
+  FileText,
   Rabbit,
   RefreshCw,
   Clock,
@@ -20,6 +21,7 @@ const menuItems = [
   { path: '/queues', title: '队列管理', icon: List },
   { path: '/exchanges', title: '交换机管理', icon: Share2 },
   { path: '/messages', title: '消息中心', icon: MessageSquare },
+  { path: '/audit', title: '消息审计', icon: FileText },
 ]
 
 const connStatus = ref<ConnectionStatus>({
@@ -143,7 +145,7 @@ onMounted(() => {
 
       <main class="flex-1 overflow-auto bg-grid p-6 animate-fade-in">
         <router-view v-slot="{ Component }">
-          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'MessageCenter', 'PublishMessage', 'BrowseMessages']">
+          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'MessageCenter', 'MessageAudit', 'PublishMessage', 'BrowseMessages']">
             <component :is="Component" />
           </keep-alive>
         </router-view>

@@ -25,6 +25,7 @@ from schemas import (
 )
 from services.rabbitmq_service import monitor
 from services import config_service
+from services import audit_service
 
 router = APIRouter(prefix="/api", tags=["monitor"])
 
@@ -225,12 +226,49 @@ def publish_message(request: PublishMessageRequest, db: Session = Depends(get_db
         content_type=request.content_type or "application/json",
     )
 
+    exchange_name = request.target_name if request.target_type == "exchange" else ""
+    queue_name = request.target_name if request.target_type == "queue" else None
+    routing_key = request.routing_key if request.target_type == "exchange" else request.target_name
+
+    properties = {
+        "content_type": request.content_type,
+        "content_encoding": request.content_encoding,
+        "delivery_mode": request.delivery_mode,
+        "priority": request.priority,
+    }
+
     if count is not None:
+        audit_service.create_audit_log(
+            db=db,
+            operation_type="publish",
+            operator="web-user",
+            target_exchange=exchange_name or None,
+            routing_key=routing_key,
+            queue_name=queue_name,
+            message_body=request.payload,
+            headers=request.headers,
+            properties=properties,
+            status="success",
+        )
         return {
             "success": True,
             "message": f"Message published to {request.target_type} '{request.target_name}' successfully",
             "published_count": count,
         }
+    else:
+        audit_service.create_audit_log(
+            db=db,
+            operation_type="publish",
+            operator="web-user",
+            target_exchange=exchange_name or None,
+            routing_key=routing_key,
+            queue_name=queue_name,
+            message_body=request.payload,
+            headers=request.headers,
+            properties=properties,
+            status="failed",
+            error_message=f"Failed to publish message to {request.target_type} '{request.target_name}'",
+        )
     raise HTTPException(status_code=500, detail=f"Failed to publish message to {request.target_type} '{request.target_name}'")
 
 
@@ -258,6 +296,23 @@ def get_queue_messages(
     )
 
     if result is not None:
+        if not requeue:
+            messages = result.get("messages", [])
+            for msg in messages:
+                audit_service.create_audit_log(
+                    db=db,
+                    operation_type="consume",
+                    operator="web-user",
+                    target_exchange=msg.get("exchange"),
+                    routing_key=msg.get("routing_key"),
+                    queue_name=queue_name,
+                    message_id=msg.get("properties", {}).get("message_id"),
+                    message_body=msg.get("payload"),
+                    headers=msg.get("headers"),
+                    properties=msg.get("properties"),
+                    delivery_tag=msg.get("delivery_tag"),
+                    status="success",
+                )
         return result
     raise HTTPException(status_code=500, detail=f"Failed to get messages from queue '{queue_name}'")
 
@@ -278,7 +333,25 @@ def ack_message(queue_name: str, request: MessageOperationRequest, db: Session =
     )
 
     if success:
+        audit_service.create_audit_log(
+            db=db,
+            operation_type="ack",
+            operator="web-user",
+            queue_name=queue_name,
+            delivery_tag=request.delivery_tag,
+            status="success",
+        )
         return {"success": True, "message": f"Message with delivery_tag {request.delivery_tag} acknowledged successfully"}
+    else:
+        audit_service.create_audit_log(
+            db=db,
+            operation_type="ack",
+            operator="web-user",
+            queue_name=queue_name,
+            delivery_tag=request.delivery_tag,
+            status="failed",
+            error_message=f"Failed to ack message with delivery_tag {request.delivery_tag}",
+        )
     raise HTTPException(status_code=500, detail=f"Failed to ack message with delivery_tag {request.delivery_tag}")
 
 
@@ -298,9 +371,30 @@ def reject_message(queue_name: str, request: MessageOperationRequest, db: Sessio
         requeue=request.requeue if request.requeue is not None else False,
     )
 
+    requeue_val = request.requeue if request.requeue is not None else False
+    action = "requeued" if requeue_val else "discarded"
+
     if success:
-        action = "requeued" if request.requeue else "discarded"
+        audit_service.create_audit_log(
+            db=db,
+            operation_type="reject",
+            operator="web-user",
+            queue_name=queue_name,
+            delivery_tag=request.delivery_tag,
+            status="success",
+            error_message=f"reject action: {action}",
+        )
         return {"success": True, "message": f"Message with delivery_tag {request.delivery_tag} rejected ({action}) successfully"}
+    else:
+        audit_service.create_audit_log(
+            db=db,
+            operation_type="reject",
+            operator="web-user",
+            queue_name=queue_name,
+            delivery_tag=request.delivery_tag,
+            status="failed",
+            error_message=f"Failed to reject message with delivery_tag {request.delivery_tag}",
+        )
     raise HTTPException(status_code=500, detail=f"Failed to reject message with delivery_tag {request.delivery_tag}")
 
 

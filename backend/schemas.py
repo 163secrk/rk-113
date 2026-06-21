@@ -203,13 +203,6 @@ class MessageProperties(BaseModel):
     cluster_id: Optional[str] = None
 
 
-class QueueMessageListResponse(BaseModel):
-    success: bool
-    messages: List[MessageItem]
-    total: int
-    queue: str
-
-
 class MessageOperationRequest(BaseModel):
     delivery_tag: int
     requeue: Optional[bool] = False
@@ -244,6 +237,13 @@ class MessageItem(BaseModel):
     dead_letter: Optional[DeadLetterInfo] = None
 
 
+class QueueMessageListResponse(BaseModel):
+    success: bool
+    messages: List[MessageItem]
+    total: int
+    queue: str
+
+
 class RepublishRequest(BaseModel):
     delivery_tag: int
     original_queue: Optional[str] = None
@@ -253,3 +253,48 @@ class RepublishRequest(BaseModel):
 class CheckQueueExistsResponse(BaseModel):
     exists: bool
     queue_name: str
+
+
+class AuditLogBase(BaseModel):
+    operation_type: str
+    operator: str = "system"
+    target_exchange: Optional[str] = None
+    routing_key: Optional[str] = None
+    queue_name: Optional[str] = None
+    message_id: Optional[str] = None
+    message_summary: Optional[str] = None
+    message_body: Optional[str] = None
+    headers: Optional[Dict[str, Any]] = None
+    properties: Optional[Dict[str, Any]] = None
+    delivery_tag: Optional[int] = None
+    status: str = "success"
+    error_message: Optional[str] = None
+
+
+class AuditLogCreate(AuditLogBase):
+    pass
+
+
+class AuditLogResponse(AuditLogBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AuditLogListResponse(BaseModel):
+    items: List[AuditLogResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class AuditLogQueryParams(BaseModel):
+    operation_type: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    keyword: Optional[str] = None
+    page: int = 1
+    page_size: int = 50

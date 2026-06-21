@@ -8,7 +8,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from database import engine, Base, SessionLocal
-from routers import monitor, config
+from routers import monitor, config, audit
 from services import config_service as cs
 from services.rabbitmq_service import monitor as rmq_monitor
 
@@ -45,6 +45,7 @@ app.add_middleware(
 
 app.include_router(monitor.router)
 app.include_router(config.router)
+app.include_router(audit.router)
 
 
 @app.get("/")

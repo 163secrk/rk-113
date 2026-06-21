@@ -409,4 +409,70 @@ export function isDeadLetterQueue(queueName: string): boolean {
   return nameLower.includes('dlq') || nameLower.includes('dead-letter') || nameLower.includes('dead_letter')
 }
 
+export interface AuditLogItem {
+  id: number
+  operation_type: string
+  operator: string
+  target_exchange: string | null
+  routing_key: string | null
+  queue_name: string | null
+  message_id: string | null
+  message_summary: string | null
+  message_body: string | null
+  headers: Record<string, unknown> | null
+  properties: Record<string, unknown> | null
+  delivery_tag: number | null
+  status: string
+  error_message: string | null
+  created_at: string
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogItem[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export interface AuditStats {
+  publish: number
+  consume: number
+  ack: number
+  reject: number
+  total: number
+}
+
+export interface AuditLogQueryParams {
+  operation_type?: string
+  start_time?: string
+  end_time?: string
+  keyword?: string
+  page?: number
+  page_size?: number
+}
+
+export const getAuditLogs = (params: AuditLogQueryParams) => {
+  const queryParams = new URLSearchParams()
+  if (params.operation_type) queryParams.append('operation_type', params.operation_type)
+  if (params.start_time) queryParams.append('start_time', params.start_time)
+  if (params.end_time) queryParams.append('end_time', params.end_time)
+  if (params.keyword) queryParams.append('keyword', params.keyword)
+  if (params.page) queryParams.append('page', String(params.page))
+  if (params.page_size) queryParams.append('page_size', String(params.page_size))
+  const query = queryParams.toString()
+  return api.get<unknown, AuditLogListResponse>(`/audit/logs${query ? `?${query}` : ''}`)
+}
+
+export const getAuditLogDetail = (logId: number) =>
+  api.get<unknown, AuditLogItem>(`/audit/logs/${logId}`)
+
+export const getAuditStats = (startTime?: string, endTime?: string) => {
+  const params = new URLSearchParams()
+  if (startTime) params.append('start_time', startTime)
+  if (endTime) params.append('end_time', endTime)
+  const query = params.toString()
+  return api.get<unknown, AuditStats>(`/audit/stats${query ? `?${query}` : ''}`)
+}
+
 export default api

@@ -6,6 +6,7 @@ import QueueDetail from '@/pages/QueueDetail.vue'
 import ExchangeList from '@/pages/ExchangeList.vue'
 import ExchangeDetail from '@/pages/ExchangeDetail.vue'
 import MessageCenter from '@/pages/MessageCenter.vue'
+import MessageAudit from '@/pages/MessageAudit.vue'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -47,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     name: 'Messages',
     component: MessageCenter,
     meta: { title: '消息中心', icon: 'MessageSquare', featureName: '消息中心' },
+  },
+  {
+    path: '/audit',
+    name: 'Audit',
+    component: MessageAudit,
+    meta: { title: '消息审计', icon: 'FileText', featureName: '消息审计' },
   },
 ]
 
