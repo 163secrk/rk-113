@@ -839,6 +839,7 @@ class RabbitMQMonitor:
                 payload_bytes = len(payload.encode("utf-8")) if isinstance(payload, str) else len(payload)
                 props = msg.get("properties", {})
                 headers = props.get("headers", {}) or {}
+                dead_letter = self._parse_dead_letter_info(headers)
 
                 messages.append({
                     "id": f"{queue_name}-{idx}-{int(time.time() * 1000)}",
@@ -866,6 +867,7 @@ class RabbitMQMonitor:
                     "redelivered": bool(msg.get("redelivered", False)),
                     "delivery_tag": idx + 1,
                     "vhost": self._config.get("rabbitmq_vhost", "/"),
+                    "dead_letter": dead_letter,
                 })
             return {
                 "success": True,
@@ -896,6 +898,7 @@ class RabbitMQMonitor:
                         payload = body.decode("utf-8") if isinstance(body, bytes) else str(body)
                         payload_bytes = len(payload.encode("utf-8"))
                         headers = dict(properties.headers) if properties.headers else {}
+                        dead_letter = self._parse_dead_letter_info(headers)
 
                         msg_info = {
                             "id": f"{queue_name}-{delivery_tag}-{int(time.time() * 1000)}",
@@ -923,6 +926,7 @@ class RabbitMQMonitor:
                             "redelivered": method.redelivered,
                             "delivery_tag": delivery_tag,
                             "vhost": self._config.get("rabbitmq_vhost", "/"),
+                            "dead_letter": dead_letter,
                         }
                         messages.append(msg_info)
                         self._unacked_messages[delivery_tag] = msg_info
@@ -972,6 +976,227 @@ class RabbitMQMonitor:
             except Exception as e:
                 logger.error(f"Failed to reject message {delivery_tag}: {e}")
                 return False
+
+    @staticmethod
+    def _parse_dead_letter_info(headers: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not headers:
+            return None
+        x_death = headers.get("x-death")
+        if not x_death or not isinstance(x_death, list) or len(x_death) == 0:
+            return None
+
+        death_info = x_death[0]
+        reason = death_info.get("reason")
+        original_queue = death_info.get("queue")
+        routing_keys = death_info.get("routing-keys", [])
+        original_routing_key = routing_keys[0] if routing_keys and isinstance(routing_keys, list) else None
+        original_exchange = death_info.get("exchange")
+        count = death_info.get("count")
+        time_val = death_info.get("time")
+
+        return {
+            "reason": reason,
+            "original_queue": original_queue,
+            "original_routing_key": original_routing_key,
+            "original_exchange": original_exchange,
+            "count": count,
+            "time": str(time_val) if time_val else None,
+        }
+
+    def _is_dead_letter_queue(self, queue_name: str) -> bool:
+        name_lower = queue_name.lower()
+        return "dlq" in name_lower or "dead-letter" in name_lower or "dead_letter" in name_lower
+
+    def check_queue_exists(self, queue_name: str) -> bool:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        path = f"/api/queues/{vhost}/{queue_encoded}"
+        data = self._mgmt_request(path, timeout=5.0, retries=1)
+        return data is not None and isinstance(data, dict) and data.get("name") == queue_name
+
+    def republish_dead_letter_message(
+        self,
+        queue_name: str,
+        delivery_tag: int,
+        original_queue: Optional[str] = None,
+        original_routing_key: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return None
+            try:
+                if self._msg_current_queue != queue_name:
+                    logger.warning(f"Republish queue mismatch: expected {self._msg_current_queue}, got {queue_name}")
+                    return None
+
+                msg_info = self._unacked_messages.get(delivery_tag)
+                if not msg_info:
+                    logger.warning(f"Message with delivery_tag {delivery_tag} not found in unacked messages")
+                    return None
+
+                headers = msg_info.get("headers", {}) or {}
+                dl_info = self._parse_dead_letter_info(headers)
+
+                target_queue = original_queue
+                if not target_queue and dl_info:
+                    target_queue = dl_info.get("original_queue")
+                if not target_queue:
+                    return {"success": False, "message": "无法确定原始队列名称，请手动指定"}
+
+                if not self.check_queue_exists(target_queue):
+                    return {"success": False, "message": f"原始队列 '{target_queue}' 不存在，无法投递"}
+
+                target_routing_key = original_routing_key
+                if not target_routing_key and dl_info:
+                    target_routing_key = dl_info.get("original_routing_key") or ""
+
+                props_data = msg_info.get("properties", {})
+                clean_headers = {k: v for k, v in headers.items() if not k.startswith("x-")}
+
+                properties = pika.BasicProperties(
+                    content_type=props_data.get("content_type"),
+                    content_encoding=props_data.get("content_encoding"),
+                    delivery_mode=props_data.get("delivery_mode", 2),
+                    priority=props_data.get("priority", 0),
+                    headers=clean_headers,
+                    correlation_id=props_data.get("correlation_id"),
+                    reply_to=props_data.get("reply_to"),
+                    expiration=props_data.get("expiration"),
+                    message_id=props_data.get("message_id"),
+                    timestamp=props_data.get("timestamp") or int(time.time()),
+                    type=props_data.get("type"),
+                    user_id=props_data.get("user_id"),
+                    app_id=props_data.get("app_id"),
+                    cluster_id=props_data.get("cluster_id"),
+                )
+
+                payload = msg_info.get("payload", "")
+                self._msg_channel.basic_publish(
+                    exchange="",
+                    routing_key=target_queue,
+                    body=payload.encode() if isinstance(payload, str) else payload,
+                    properties=properties,
+                )
+
+                self._msg_channel.basic_ack(delivery_tag=delivery_tag)
+                if delivery_tag in self._unacked_messages:
+                    del self._unacked_messages[delivery_tag]
+
+                return {
+                    "success": True,
+                    "message": f"消息已重新投递到队列 '{target_queue}'",
+                    "target_queue": target_queue,
+                    "target_routing_key": target_routing_key,
+                }
+            except Exception as e:
+                logger.error(f"Failed to republish message {delivery_tag}: {e}")
+                return {"success": False, "message": f"重新投递失败: {str(e)}"}
+
+    def republish_all_dead_letters(self, queue_name: str) -> Optional[Dict[str, Any]]:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        path = f"/api/queues/{vhost}/{queue_encoded}"
+        queue_info = self._mgmt_request(path, timeout=5.0, retries=1)
+        total_messages = 0
+        if queue_info:
+            total_messages = queue_info.get("messages", 0)
+
+        if total_messages == 0:
+            return {"success": True, "message": "死信队列为空，无需投递", "total": 0, "success_count": 0, "failed_count": 0}
+
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return None
+
+            try:
+                self._nack_all_unacked()
+                self._msg_current_queue = queue_name
+
+                success_count = 0
+                failed_count = 0
+                failed_details = []
+                processed_count = min(total_messages, 500)
+
+                for i in range(processed_count):
+                    try:
+                        method, properties, body = self._msg_channel.basic_get(
+                            queue=queue_name,
+                            auto_ack=False,
+                        )
+                        if method is None:
+                            break
+
+                        delivery_tag = method.delivery_tag
+                        payload = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+                        headers = dict(properties.headers) if properties.headers else {}
+                        dl_info = self._parse_dead_letter_info(headers)
+
+                        target_queue = None
+                        if dl_info:
+                            target_queue = dl_info.get("original_queue")
+                        if not target_queue:
+                            failed_count += 1
+                            failed_details.append(f"消息 #{i+1}: 无法确定原始队列")
+                            self._msg_channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+                            continue
+
+                        if not self.check_queue_exists(target_queue):
+                            failed_count += 1
+                            failed_details.append(f"消息 #{i+1}: 原始队列 '{target_queue}' 不存在")
+                            self._msg_channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+                            continue
+
+                        target_routing_key = None
+                        if dl_info:
+                            target_routing_key = dl_info.get("original_routing_key") or ""
+
+                        clean_headers = {k: v for k, v in headers.items() if not k.startswith("x-")}
+                        new_properties = pika.BasicProperties(
+                            content_type=properties.content_type,
+                            content_encoding=properties.content_encoding,
+                            delivery_mode=properties.delivery_mode or 2,
+                            priority=properties.priority or 0,
+                            headers=clean_headers,
+                            correlation_id=properties.correlation_id,
+                            reply_to=properties.reply_to,
+                            expiration=properties.expiration,
+                            message_id=properties.message_id,
+                            timestamp=properties.timestamp or int(time.time()),
+                            type=properties.type,
+                            user_id=properties.user_id,
+                            app_id=properties.app_id,
+                            cluster_id=properties.cluster_id,
+                        )
+
+                        self._msg_channel.basic_publish(
+                            exchange="",
+                            routing_key=target_queue,
+                            body=payload.encode() if isinstance(payload, str) else payload,
+                            properties=new_properties,
+                        )
+
+                        self._msg_channel.basic_ack(delivery_tag=delivery_tag)
+                        success_count += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to republish message {i}: {e}")
+                        failed_count += 1
+                        failed_details.append(f"消息 #{i+1}: {str(e)}")
+                        try:
+                            self._msg_channel.basic_nack(delivery_tag=method.delivery_tag if method else 0, requeue=True)
+                        except Exception:
+                            pass
+
+                return {
+                    "success": True,
+                    "message": f"批量重新投递完成，成功 {success_count} 条，失败 {failed_count} 条",
+                    "total": processed_count,
+                    "success_count": success_count,
+                    "failed_count": failed_count,
+                    "failed_details": failed_details[:10] if failed_details else [],
+                }
+            except Exception as e:
+                logger.error(f"Failed to republish all dead letters: {e}")
+                return {"success": False, "message": f"批量重新投递失败: {str(e)}"}
 
 
 monitor = RabbitMQMonitor()

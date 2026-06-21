@@ -19,6 +19,9 @@ from schemas import (
     QueueMessageListResponse,
     MessageOperationRequest,
     MessageOperationResponse,
+    RepublishRequest,
+    CheckQueueExistsResponse,
+    DeadLetterInfo,
 )
 from services.rabbitmq_service import monitor
 from services import config_service
@@ -299,3 +302,52 @@ def reject_message(queue_name: str, request: MessageOperationRequest, db: Sessio
         action = "requeued" if request.requeue else "discarded"
         return {"success": True, "message": f"Message with delivery_tag {request.delivery_tag} rejected ({action}) successfully"}
     raise HTTPException(status_code=500, detail=f"Failed to reject message with delivery_tag {request.delivery_tag}")
+
+
+@router.get("/rabbitmq/queues/{queue_name}/exists", response_model=CheckQueueExistsResponse)
+def check_queue_exists(queue_name: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    exists = monitor.check_queue_exists(queue_name)
+    return {"exists": exists, "queue_name": queue_name}
+
+
+@router.post("/rabbitmq/queues/{queue_name}/messages/republish", response_model=OperationResponse)
+def republish_dead_letter(
+    queue_name: str,
+    request: RepublishRequest,
+    db: Session = Depends(get_db),
+):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+    if request.delivery_tag is None:
+        raise HTTPException(status_code=400, detail="delivery_tag is required")
+
+    result = monitor.republish_dead_letter_message(
+        queue_name=queue_name,
+        delivery_tag=request.delivery_tag,
+        original_queue=request.original_queue,
+        original_routing_key=request.original_routing_key,
+    )
+
+    if result is not None:
+        return {"success": result.get("success", False), "message": result.get("message", "")}
+    raise HTTPException(status_code=500, detail="Failed to republish dead letter message")
+
+
+@router.post("/rabbitmq/queues/{queue_name}/messages/republish-all")
+def republish_all_dead_letters(queue_name: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+
+    result = monitor.republish_all_dead_letters(queue_name)
+
+    if result is not None:
+        return result
+    raise HTTPException(status_code=500, detail="Failed to republish all dead letters")

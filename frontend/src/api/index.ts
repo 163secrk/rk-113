@@ -294,6 +294,15 @@ export interface PublishMessageResponse {
   published_count?: number
 }
 
+export interface DeadLetterInfo {
+  reason?: string
+  original_queue?: string
+  original_routing_key?: string
+  original_exchange?: string
+  count?: number
+  time?: string
+}
+
 export interface MessageItem {
   id: string
   index: number
@@ -320,6 +329,27 @@ export interface MessageItem {
   redelivered: boolean
   delivery_tag: number
   vhost: string
+  dead_letter?: DeadLetterInfo
+}
+
+export interface RepublishRequest {
+  delivery_tag: number
+  original_queue?: string
+  original_routing_key?: string
+}
+
+export interface RepublishAllResponse {
+  success: boolean
+  message: string
+  total?: number
+  success_count?: number
+  failed_count?: number
+  failed_details?: string[]
+}
+
+export interface CheckQueueExistsResponse {
+  exists: boolean
+  queue_name: string
 }
 
 export interface QueueMessageListResponse {
@@ -357,5 +387,26 @@ export const rejectMessage = (queueName: string, deliveryTag: number, requeue = 
     `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/reject`,
     { delivery_tag: deliveryTag, requeue }
   )
+
+export const checkQueueExists = (queueName: string) =>
+  api.get<unknown, CheckQueueExistsResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/exists`
+  )
+
+export const republishDeadLetter = (queueName: string, data: RepublishRequest) =>
+  api.post<unknown, OperationResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/republish`,
+    data
+  )
+
+export const republishAllDeadLetters = (queueName: string) =>
+  api.post<unknown, RepublishAllResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/republish-all`
+  )
+
+export function isDeadLetterQueue(queueName: string): boolean {
+  const nameLower = queueName.toLowerCase()
+  return nameLower.includes('dlq') || nameLower.includes('dead-letter') || nameLower.includes('dead_letter')
+}
 
 export default api

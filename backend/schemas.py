@@ -203,20 +203,6 @@ class MessageProperties(BaseModel):
     cluster_id: Optional[str] = None
 
 
-class MessageItem(BaseModel):
-    id: str
-    index: int
-    payload: str
-    payload_bytes: int
-    headers: Dict[str, Any]
-    properties: MessageProperties
-    exchange: str
-    routing_key: str
-    redelivered: bool
-    delivery_tag: int
-    vhost: str
-
-
 class QueueMessageListResponse(BaseModel):
     success: bool
     messages: List[MessageItem]
@@ -232,3 +218,38 @@ class MessageOperationRequest(BaseModel):
 class MessageOperationResponse(BaseModel):
     success: bool
     message: str
+
+
+class DeadLetterInfo(BaseModel):
+    reason: Optional[str] = None
+    original_queue: Optional[str] = None
+    original_routing_key: Optional[str] = None
+    original_exchange: Optional[str] = None
+    count: Optional[int] = None
+    time: Optional[str] = None
+
+
+class MessageItem(BaseModel):
+    id: str
+    index: int
+    payload: str
+    payload_bytes: int
+    headers: Dict[str, Any]
+    properties: MessageProperties
+    exchange: str
+    routing_key: str
+    redelivered: bool
+    delivery_tag: int
+    vhost: str
+    dead_letter: Optional[DeadLetterInfo] = None
+
+
+class RepublishRequest(BaseModel):
+    delivery_tag: int
+    original_queue: Optional[str] = None
+    original_routing_key: Optional[str] = None
+
+
+class CheckQueueExistsResponse(BaseModel):
+    exists: bool
+    queue_name: str

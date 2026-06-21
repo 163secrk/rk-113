@@ -11,6 +11,7 @@ import {
   Users,
   AlertCircle,
   ArrowRight,
+  Skull,
 } from 'lucide-vue-next'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -18,6 +19,7 @@ import {
   createQueue,
   purgeQueue,
   deleteQueue,
+  isDeadLetterQueue,
   type QueueListItem,
   type CreateQueueRequest,
 } from '@/api'
@@ -302,10 +304,25 @@ onBeforeUnmount(() => {
                   class="flex items-center gap-2 text-ops-text hover:text-ops-primary transition-colors duration-150 group"
                   @click="goToDetail(queue.name)"
                 >
-                  <span class="font-medium">{{ queue.name }}</span>
+                  <Skull
+                    v-if="isDeadLetterQueue(queue.name)"
+                    class="w-4 h-4 text-red-400"
+                    title="死信队列"
+                  />
+                  <Database
+                    v-else
+                    class="w-4 h-4 text-ops-muted"
+                  />
+                  <span class="font-medium" :class="{ 'text-red-400': isDeadLetterQueue(queue.name) }">{{ queue.name }}</span>
                   <ArrowRight class="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
                 </a>
                 <div class="flex items-center gap-2 mt-1">
+                  <span
+                    v-if="isDeadLetterQueue(queue.name)"
+                    class="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-red-500/15 text-red-400"
+                  >
+                    死信队列
+                  </span>
                   <span
                     v-if="queue.durable"
                     class="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-blue-500/15 text-blue-400"
