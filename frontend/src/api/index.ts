@@ -276,4 +276,86 @@ export const deleteBinding = (
   )
 }
 
+export interface PublishMessageRequest {
+  target_type: 'exchange' | 'queue'
+  target_name: string
+  routing_key: string
+  payload: string
+  headers?: Record<string, string>
+  content_encoding?: string
+  delivery_mode?: 1 | 2
+  priority?: number
+  content_type?: string
+}
+
+export interface PublishMessageResponse {
+  success: boolean
+  message: string
+  published_count?: number
+}
+
+export interface MessageItem {
+  id: string
+  index: number
+  payload: string
+  payload_bytes: number
+  headers: Record<string, string>
+  properties: {
+    content_type?: string
+    content_encoding?: string
+    delivery_mode?: number
+    priority?: number
+    correlation_id?: string
+    reply_to?: string
+    expiration?: string
+    message_id?: string
+    timestamp?: number
+    type?: string
+    user_id?: string
+    app_id?: string
+    cluster_id?: string
+  }
+  exchange: string
+  routing_key: string
+  redelivered: boolean
+  delivery_tag: number
+  vhost: string
+}
+
+export interface QueueMessageListResponse {
+  success: boolean
+  messages: MessageItem[]
+  total: number
+  queue: string
+}
+
+export interface MessageOperationResponse {
+  success: boolean
+  message: string
+}
+
+export const publishMessage = (data: PublishMessageRequest) =>
+  api.post<unknown, PublishMessageResponse>('/rabbitmq/messages/publish', data)
+
+export const getQueueMessages = (queueName: string, limit = 50, requeue = true) => {
+  const params = new URLSearchParams()
+  params.append('limit', String(limit))
+  params.append('requeue', String(requeue))
+  return api.get<unknown, QueueMessageListResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages?${params.toString()}`
+  )
+}
+
+export const ackMessage = (queueName: string, deliveryTag: number) =>
+  api.post<unknown, MessageOperationResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/ack`,
+    { delivery_tag: deliveryTag }
+  )
+
+export const rejectMessage = (queueName: string, deliveryTag: number, requeue = false) =>
+  api.post<unknown, MessageOperationResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/reject`,
+    { delivery_tag: deliveryTag, requeue }
+  )
+
 export default api
