@@ -529,4 +529,116 @@ export const getUsers = () =>
 export const getUserDetail = (username: string) =>
   api.get<unknown, UserDetail>(`/rabbitmq/users/${encodeURIComponent(username)}`)
 
+export type AlertConditionType = 'ready_gt' | 'unacked_gt' | 'consumers_eq_0' | 'rate_gt'
+export type AlertLevel = 'warning' | 'critical'
+export type AlertStatus = 'active' | 'acknowledged' | 'resolved' | 'closed'
+
+export interface AlertRule {
+  id: number
+  name: string
+  queue_name: string
+  condition_type: AlertConditionType
+  threshold: number
+  level: AlertLevel
+  enabled: boolean
+  description?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AlertRuleCreate {
+  name: string
+  queue_name: string
+  condition_type: AlertConditionType
+  threshold: number
+  level?: AlertLevel
+  enabled?: boolean
+  description?: string
+}
+
+export interface AlertRuleUpdate {
+  name?: string
+  queue_name?: string
+  condition_type?: AlertConditionType
+  threshold?: number
+  level?: AlertLevel
+  enabled?: boolean
+  description?: string
+}
+
+export interface AlertRecord {
+  id: number
+  rule_id: number
+  rule_name: string
+  queue_name: string
+  condition_type: AlertConditionType
+  threshold: number
+  current_value: number
+  level: AlertLevel
+  status: AlertStatus
+  acknowledged_by?: string
+  acknowledged_at?: string
+  resolved_at?: string
+  message?: string
+  created_at: string
+}
+
+export interface AlertListResponse {
+  items: AlertRecord[]
+  total: number
+}
+
+export interface ConditionTypeOption {
+  value: AlertConditionType
+  label: string
+}
+
+export interface LevelOption {
+  value: AlertLevel
+  label: string
+}
+
+export const getAlertRules = (enabledOnly = false) => {
+  const params = new URLSearchParams()
+  if (enabledOnly) params.append('enabled_only', 'true')
+  const query = params.toString()
+  return api.get<unknown, AlertRule[]>(`/alerts/rules${query ? `?${query}` : ''}`)
+}
+
+export const createAlertRule = (data: AlertRuleCreate) =>
+  api.post<unknown, AlertRule>('/alerts/rules', data)
+
+export const getAlertRule = (ruleId: number) =>
+  api.get<unknown, AlertRule>(`/alerts/rules/${ruleId}`)
+
+export const updateAlertRule = (ruleId: number, data: AlertRuleUpdate) =>
+  api.put<unknown, AlertRule>(`/alerts/rules/${ruleId}`, data)
+
+export const deleteAlertRule = (ruleId: number) =>
+  api.delete<unknown, OperationResponse>(`/alerts/rules/${ruleId}`)
+
+export const getAlertRecords = (params?: { status?: AlertStatus; level?: AlertLevel; limit?: number }) => {
+  const queryParams = new URLSearchParams()
+  if (params?.status) queryParams.append('status', params.status)
+  if (params?.level) queryParams.append('level', params.level)
+  if (params?.limit) queryParams.append('limit', String(params.limit))
+  const query = queryParams.toString()
+  return api.get<unknown, AlertListResponse>(`/alerts/records${query ? `?${query}` : ''}`)
+}
+
+export const acknowledgeAlertRecord = (recordId: number) =>
+  api.post<unknown, AlertRecord>(`/alerts/records/${recordId}/acknowledge`)
+
+export const closeAlertRecord = (recordId: number) =>
+  api.post<unknown, AlertRecord>(`/alerts/records/${recordId}/close`)
+
+export const evaluateAlertsNow = () =>
+  api.post<unknown, AlertRecord[]>('/alerts/evaluate')
+
+export const getAlertConditionTypes = () =>
+  api.get<unknown, ConditionTypeOption[]>('/alerts/condition-types')
+
+export const getAlertLevels = () =>
+  api.get<unknown, LevelOption[]>('/alerts/levels')
+
 export default api

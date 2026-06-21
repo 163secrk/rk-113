@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Gauge,
@@ -12,11 +12,15 @@ import {
   Clock,
   Link2,
   Users,
+  Bell,
 } from 'lucide-vue-next'
 import { getConnectionStatus, type ConnectionStatus } from '@/api'
+import { useAlertStore } from '@/stores/alert'
+import AlertBanner from '@/components/AlertBanner.vue'
 
 const route = useRoute()
 const router = useRouter()
+const alertStore = useAlertStore()
 
 const menuItems = [
   { path: '/dashboard', title: 'Dashboard', icon: Gauge },
@@ -26,6 +30,7 @@ const menuItems = [
   { path: '/audit', title: '消息审计', icon: FileText },
   { path: '/connections', title: '连接管理', icon: Link2 },
   { path: '/users', title: '用户管理', icon: Users },
+  { path: '/alerts', title: '告警中心', icon: Bell, badge: true },
 ]
 
 const connStatus = ref<ConnectionStatus>({
@@ -36,6 +41,8 @@ const connStatus = ref<ConnectionStatus>({
 
 const currentTime = ref(new Date())
 let timer: number
+let statusTimer: number
+let alertTimer: number
 
 function formatUptime(seconds?: number): string {
   if (!seconds) return '--'
@@ -72,16 +79,29 @@ const statusText = computed(() => {
   }
 })
 
+const activeAlertCount = computed(() => alertStore.activeRecords.length)
+
 function navigate(path: string) {
   router.push(path)
 }
 
-onMounted(() => {
+onMounted(async () => {
   fetchStatus()
-  setInterval(fetchStatus, 5000)
+  statusTimer = window.setInterval(fetchStatus, 5000)
   timer = window.setInterval(() => {
     currentTime.value = new Date()
   }, 1000)
+  await alertStore.fetchRecords({ limit: 100 })
+  await alertStore.evaluate()
+  alertTimer = window.setInterval(() => {
+    alertStore.evaluate()
+  }, 5000)
+})
+
+onBeforeUnmount(() => {
+  if (timer) clearInterval(timer)
+  if (statusTimer) clearInterval(statusTimer)
+  if (alertTimer) clearInterval(alertTimer)
 })
 </script>
 
@@ -103,12 +123,18 @@ onMounted(() => {
         <div
           v-for="item in menuItems"
           :key="item.path"
-          class="menu-item"
+          class="menu-item relative"
           :class="{ active: route.path === item.path }"
           @click="navigate(item.path)"
         >
           <component :is="item.icon" class="w-5 h-5" />
           <span class="text-sm">{{ item.title }}</span>
+          <span
+            v-if="item.badge && activeAlertCount > 0"
+            class="absolute right-4 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-xs rounded-full bg-red-500 text-white font-medium"
+          >
+            {{ activeAlertCount > 99 ? '99+' : activeAlertCount }}
+          </span>
         </div>
       </nav>
 
@@ -121,6 +147,7 @@ onMounted(() => {
     </aside>
 
     <div class="flex-1 flex flex-col overflow-hidden">
+      <AlertBanner />
       <header class="h-16 flex-shrink-0 bg-ops-panel border-b border-ops-border flex items-center justify-between px-6">
         <div class="flex items-center gap-4">
           <h1 class="text-lg font-semibold">{{ (route.meta.title as string) || 'MQ Ops Center' }}</h1>
@@ -149,7 +176,7 @@ onMounted(() => {
 
       <main class="flex-1 overflow-auto bg-grid p-6 animate-fade-in">
         <router-view v-slot="{ Component }">
-          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'MessageCenter', 'MessageAudit', 'PublishMessage', 'BrowseMessages', 'ConnectionList', 'UserList']">
+          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'MessageCenter', 'MessageAudit', 'PublishMessage', 'BrowseMessages', 'ConnectionList', 'UserList', 'AlertCenter']">
             <component :is="Component" />
           </keep-alive>
         </router-view>

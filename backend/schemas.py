@@ -338,3 +338,72 @@ class UserDetail(BaseModel):
     tags: List[str] = []
     permissions: List[UserPermission] = []
     topic_permissions: List[UserTopicPermission] = []
+
+
+class AlertRuleBase(BaseModel):
+    name: str
+    queue_name: str
+    condition_type: str
+    threshold: float
+    level: str = "warning"
+    enabled: bool = True
+    description: Optional[str] = None
+
+
+class AlertRuleCreate(AlertRuleBase):
+    pass
+
+
+class AlertRuleUpdate(BaseModel):
+    name: Optional[str] = None
+    queue_name: Optional[str] = None
+    condition_type: Optional[str] = None
+    threshold: Optional[float] = None
+    level: Optional[str] = None
+    enabled: Optional[bool] = None
+    description: Optional[str] = None
+
+
+class AlertRuleResponse(AlertRuleBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AlertRecordBase(BaseModel):
+    rule_id: int
+    rule_name: str
+    queue_name: str
+    condition_type: str
+    threshold: float
+    current_value: float
+    level: str
+    message: Optional[str] = None
+
+
+class AlertRecordCreate(AlertRecordBase):
+    pass
+
+
+class AlertRecordResponse(AlertRecordBase):
+    id: int
+    status: str
+    acknowledged_by: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AlertListResponse(BaseModel):
+    items: List[AlertRecordResponse]
+    total: int
+
+
+class AlertEvaluateRequest(BaseModel):
+    queues: List[Dict[str, Any]]

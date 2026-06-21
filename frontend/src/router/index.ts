@@ -9,6 +9,7 @@ import MessageCenter from '@/pages/MessageCenter.vue'
 import MessageAudit from '@/pages/MessageAudit.vue'
 import ConnectionList from '@/pages/ConnectionList.vue'
 import UserList from '@/pages/UserList.vue'
+import AlertCenter from '@/pages/AlertCenter.vue'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -68,6 +69,12 @@ const routes: RouteRecordRaw[] = [
     name: 'Users',
     component: UserList,
     meta: { title: '用户管理', icon: 'Users', featureName: '用户管理' },
+  },
+  {
+    path: '/alerts',
+    name: 'Alerts',
+    component: AlertCenter,
+    meta: { title: '告警中心', icon: 'Bell', featureName: '告警中心' },
   },
 ]
 
