@@ -10,6 +10,8 @@ import {
   Rabbit,
   RefreshCw,
   Clock,
+  Link2,
+  Users,
 } from 'lucide-vue-next'
 import { getConnectionStatus, type ConnectionStatus } from '@/api'
 
@@ -22,6 +24,8 @@ const menuItems = [
   { path: '/exchanges', title: '交换机管理', icon: Share2 },
   { path: '/messages', title: '消息中心', icon: MessageSquare },
   { path: '/audit', title: '消息审计', icon: FileText },
+  { path: '/connections', title: '连接管理', icon: Link2 },
+  { path: '/users', title: '用户管理', icon: Users },
 ]
 
 const connStatus = ref<ConnectionStatus>({
@@ -145,7 +149,7 @@ onMounted(() => {
 
       <main class="flex-1 overflow-auto bg-grid p-6 animate-fade-in">
         <router-view v-slot="{ Component }">
-          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'MessageCenter', 'MessageAudit', 'PublishMessage', 'BrowseMessages']">
+          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'MessageCenter', 'MessageAudit', 'PublishMessage', 'BrowseMessages', 'ConnectionList', 'UserList']">
             <component :is="Component" />
           </keep-alive>
         </router-view>

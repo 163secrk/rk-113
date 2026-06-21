@@ -7,6 +7,8 @@ import ExchangeList from '@/pages/ExchangeList.vue'
 import ExchangeDetail from '@/pages/ExchangeDetail.vue'
 import MessageCenter from '@/pages/MessageCenter.vue'
 import MessageAudit from '@/pages/MessageAudit.vue'
+import ConnectionList from '@/pages/ConnectionList.vue'
+import UserList from '@/pages/UserList.vue'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -54,6 +56,18 @@ const routes: RouteRecordRaw[] = [
     name: 'Audit',
     component: MessageAudit,
     meta: { title: '消息审计', icon: 'FileText', featureName: '消息审计' },
+  },
+  {
+    path: '/connections',
+    name: 'Connections',
+    component: ConnectionList,
+    meta: { title: '连接管理', icon: 'Link2', featureName: '连接管理' },
+  },
+  {
+    path: '/users',
+    name: 'Users',
+    component: UserList,
+    meta: { title: '用户管理', icon: 'Users', featureName: '用户管理' },
   },
 ]
 

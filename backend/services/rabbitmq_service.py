@@ -1198,5 +1198,114 @@ class RabbitMQMonitor:
                 logger.error(f"Failed to republish all dead letters: {e}")
                 return {"success": False, "message": f"批量重新投递失败: {str(e)}"}
 
+    def list_connections(self) -> Optional[list[Dict[str, Any]]]:
+        data = self._mgmt_request("/api/connections", timeout=8.0, retries=1)
+        if data is None:
+            return None
+        result = []
+        for c in data:
+            result.append({
+                "name": c.get("name", ""),
+                "client_ip": c.get("peer_host", ""),
+                "client_port": c.get("peer_port", 0),
+                "username": c.get("user", ""),
+                "vhost": c.get("vhost", "/"),
+                "connected_at": c.get("connected_at", 0),
+                "channels": c.get("channels", 0),
+                "server_ip": c.get("host", ""),
+                "server_port": c.get("port", 0),
+                "protocol": c.get("protocol", ""),
+                "type": c.get("type", ""),
+            })
+        return result
+
+    def close_connection(self, connection_name: str) -> bool:
+        name_encoded = quote(connection_name, safe="")
+        url = f"/api/connections/{name_encoded}"
+        return self._mgmt_request_delete(url, timeout=6.0, retries=1)
+
+    def list_users(self) -> Optional[list[Dict[str, Any]]]:
+        data = self._mgmt_request("/api/users", timeout=8.0, retries=1)
+        if data is None:
+            return None
+        result = []
+        for u in data:
+            result.append({
+                "name": u.get("name", ""),
+                "tags": u.get("tags", []) if isinstance(u.get("tags", []), list) else [],
+            })
+        return result
+
+    def get_user_detail(self, username: str) -> Optional[Dict[str, Any]]:
+        user_encoded = quote(username, safe="")
+
+        def _fetch(path: str) -> Optional[Any]:
+            return self._mgmt_request(path, timeout=6.0, retries=1)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_path = {
+                executor.submit(_fetch, f"/api/users/{user_encoded}"): "user",
+                executor.submit(_fetch, f"/api/users/{user_encoded}/permissions"): "permissions",
+                executor.submit(_fetch, f"/api/users/{user_encoded}/topic-permissions"): "topic_permissions",
+            }
+            results: Dict[str, Any] = {}
+            try:
+                for future in as_completed(future_to_path, timeout=15.0):
+                    path_key = future_to_path[future]
+                    try:
+                        results[path_key] = future.result()
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch {path_key}: {e}")
+                        results[path_key] = None
+            except TimeoutError:
+                logger.debug(f"Timeout fetching user detail for {username}, returning partial data")
+                for path_key, future in future_to_path.items():
+                    if path_key not in results:
+                        if future.done():
+                            try:
+                                results[path_key] = future.result()
+                            except Exception:
+                                results[path_key] = None
+                        else:
+                            results[path_key] = None
+                            future.cancel()
+
+        user_data = results.get("user")
+        if user_data is None:
+            return None
+
+        permissions_list = []
+        raw_permissions = results.get("permissions")
+        if raw_permissions and isinstance(raw_permissions, list):
+            for p in raw_permissions:
+                permissions_list.append({
+                    "vhost": p.get("vhost", "/"),
+                    "configure": p.get("configure", ""),
+                    "write": p.get("write", ""),
+                    "read": p.get("read", ""),
+                })
+
+        topic_permissions_list = []
+        raw_topic_permissions = results.get("topic_permissions")
+        if raw_topic_permissions and isinstance(raw_topic_permissions, list):
+            for tp in raw_topic_permissions:
+                topic_permissions_list.append({
+                    "vhost": tp.get("vhost", "/"),
+                    "exchange": tp.get("exchange", ""),
+                    "write": tp.get("write", ""),
+                    "read": tp.get("read", ""),
+                })
+
+        tags = user_data.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+
+        return {
+            "name": user_data.get("name", username),
+            "tags": tags,
+            "permissions": permissions_list,
+            "topic_permissions": topic_permissions_list,
+        }
+
 
 monitor = RabbitMQMonitor()

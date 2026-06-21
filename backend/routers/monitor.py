@@ -22,6 +22,9 @@ from schemas import (
     RepublishRequest,
     CheckQueueExistsResponse,
     DeadLetterInfo,
+    ConnectionListItem,
+    UserListItem,
+    UserDetail,
 )
 from services.rabbitmq_service import monitor
 from services import config_service
@@ -445,3 +448,47 @@ def republish_all_dead_letters(queue_name: str, db: Session = Depends(get_db)):
     if result is not None:
         return result
     raise HTTPException(status_code=500, detail="Failed to republish all dead letters")
+
+
+@router.get("/rabbitmq/connections", response_model=list[ConnectionListItem])
+def list_connections(db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    connections = monitor.list_connections()
+    if connections is None:
+        raise HTTPException(status_code=500, detail="Failed to fetch connections from RabbitMQ")
+    return connections
+
+
+@router.delete("/rabbitmq/connections/{connection_name}", response_model=OperationResponse)
+def close_connection(connection_name: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    if not connection_name:
+        raise HTTPException(status_code=400, detail="connection_name is required")
+    success = monitor.close_connection(connection_name)
+    if success:
+        return {"success": True, "message": f"Connection '{connection_name}' closed successfully"}
+    raise HTTPException(status_code=500, detail=f"Failed to close connection '{connection_name}'")
+
+
+@router.get("/rabbitmq/users", response_model=list[UserListItem])
+def list_users(db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    users = monitor.list_users()
+    if users is None:
+        raise HTTPException(status_code=500, detail="Failed to fetch users from RabbitMQ")
+    return users
+
+
+@router.get("/rabbitmq/users/{username}", response_model=UserDetail)
+def get_user_detail(username: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+    detail = monitor.get_user_detail(username)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+    return detail

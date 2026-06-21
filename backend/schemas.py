@@ -298,3 +298,43 @@ class AuditLogQueryParams(BaseModel):
     keyword: Optional[str] = None
     page: int = 1
     page_size: int = 50
+
+
+class ConnectionListItem(BaseModel):
+    name: str
+    client_ip: str
+    client_port: int
+    username: str
+    vhost: str
+    connected_at: int
+    channels: int
+    server_ip: str
+    server_port: int
+    protocol: Optional[str] = None
+    type: Optional[str] = None
+
+
+class UserListItem(BaseModel):
+    name: str
+    tags: List[str] = []
+
+
+class UserPermission(BaseModel):
+    vhost: str
+    configure: str
+    write: str
+    read: str
+
+
+class UserTopicPermission(BaseModel):
+    vhost: str
+    exchange: str
+    write: str
+    read: str
+
+
+class UserDetail(BaseModel):
+    name: str
+    tags: List[str] = []
+    permissions: List[UserPermission] = []
+    topic_permissions: List[UserTopicPermission] = []

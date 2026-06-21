@@ -475,4 +475,58 @@ export const getAuditStats = (startTime?: string, endTime?: string) => {
   return api.get<unknown, AuditStats>(`/audit/stats${query ? `?${query}` : ''}`)
 }
 
+export interface ConnectionListItem {
+  name: string
+  client_ip: string
+  client_port: number
+  username: string
+  vhost: string
+  connected_at: number
+  channels: number
+  server_ip: string
+  server_port: number
+  protocol?: string
+  type?: string
+}
+
+export interface UserListItem {
+  name: string
+  tags: string[]
+}
+
+export interface UserPermission {
+  vhost: string
+  configure: string
+  write: string
+  read: string
+}
+
+export interface UserTopicPermission {
+  vhost: string
+  exchange: string
+  write: string
+  read: string
+}
+
+export interface UserDetail {
+  name: string
+  tags: string[]
+  permissions: UserPermission[]
+  topic_permissions: UserTopicPermission[]
+}
+
+export const getConnections = () =>
+  api.get<unknown, ConnectionListItem[]>('/rabbitmq/connections')
+
+export const closeConnection = (connectionName: string) =>
+  api.delete<unknown, OperationResponse>(
+    `/rabbitmq/connections/${encodeURIComponent(connectionName)}`
+  )
+
+export const getUsers = () =>
+  api.get<unknown, UserListItem[]>('/rabbitmq/users')
+
+export const getUserDetail = (username: string) =>
+  api.get<unknown, UserDetail>(`/rabbitmq/users/${encodeURIComponent(username)}`)
+
 export default api
