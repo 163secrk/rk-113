@@ -30,7 +30,7 @@ function syncFromRoute() {
 
 function switchTab(tabName: TabName) {
   activeTab.value = tabName
-  router.replace({ hash: tabName })
+  router.replace({ hash: `#${tabName}` })
 }
 
 watch(

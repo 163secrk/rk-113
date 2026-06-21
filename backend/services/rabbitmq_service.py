@@ -39,6 +39,11 @@ class RabbitMQMonitor:
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+        self._msg_channel: Optional[pika.channel.Channel] = None
+        self._msg_lock = threading.Lock()
+        self._msg_current_queue: Optional[str] = None
+        self._unacked_messages: Dict[int, Dict[str, Any]] = {}
+
     @staticmethod
     def _normalize_host(host: str) -> str:
         if host.strip().lower() == "localhost":
@@ -95,13 +100,21 @@ class RabbitMQMonitor:
         except Exception:
             pass
         try:
+            if self._msg_channel and self._msg_channel.is_open:
+                self._msg_channel.close()
+        except Exception:
+            pass
+        try:
             if self._connection and self._connection.is_open:
                 self._connection.close()
         except Exception:
             pass
         self._connection = None
         self._channel = None
+        self._msg_channel = None
         self._connected = False
+        self._msg_current_queue = None
+        self._unacked_messages = {}
 
     def _connect_once(self) -> bool:
         self._disconnect_locked()
@@ -669,6 +682,295 @@ class RabbitMQMonitor:
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 logger.debug(f"Management API POST failed for {path} after {retries + 1} attempts: {e}")
+                return False
+
+    def _mgmt_request_post_data(self, path: str, body: Dict[str, Any], timeout: float = 5.0, retries: int = 1) -> Optional[Any]:
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                host = self._get_host()
+                mgmt_port = self._config.get("rabbitmq_mgmt_port", "15672")
+                username = self._config.get("rabbitmq_username", "admin")
+                password = self._config.get("rabbitmq_password", "admin123")
+                url = f"http://{host}:{mgmt_port}{path}"
+                auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+                data = json.dumps(body).encode()
+                req = Request(
+                    url,
+                    data=data,
+                    headers={
+                        "Authorization": f"Basic {auth}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                with urlopen(req, timeout=timeout) as resp:
+                    resp_data = resp.read().decode()
+                    return json.loads(resp_data)
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                logger.debug(f"Management API POST data failed for {path} after {retries + 1} attempts: {e}")
+                return None
+
+    def _ensure_msg_channel(self) -> bool:
+        try:
+            if self._msg_channel and self._msg_channel.is_open:
+                return True
+            if self._connection and self._connection.is_open:
+                self._msg_channel = self._connection.channel()
+                return True
+        except Exception as e:
+            logger.debug(f"Failed to create msg channel: {e}")
+        if self._connect_once():
+            try:
+                if self._connection and self._connection.is_open:
+                    self._msg_channel = self._connection.channel()
+                    return True
+            except Exception as e:
+                logger.debug(f"Failed to create msg channel after reconnect: {e}")
+        return False
+
+    def _nack_all_unacked(self) -> None:
+        if not self._msg_channel or not self._msg_channel.is_open:
+            return
+        try:
+            if self._unacked_messages:
+                self._msg_channel.basic_nack(
+                    delivery_tag=max(self._unacked_messages.keys()),
+                    multiple=True,
+                    requeue=True,
+                )
+                self._unacked_messages = {}
+        except Exception as e:
+            logger.debug(f"Failed to nack all unacked messages: {e}")
+
+    def publish_message(
+        self,
+        target_type: str,
+        target_name: str,
+        routing_key: str = "",
+        payload: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        content_encoding: Optional[str] = None,
+        delivery_mode: int = 2,
+        priority: int = 0,
+        content_type: str = "application/json",
+    ) -> Optional[int]:
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return None
+            try:
+                if target_type == "queue":
+                    exchange_name = ""
+                    final_routing_key = target_name
+                else:
+                    exchange_name = target_name
+                    final_routing_key = routing_key or ""
+
+                properties = pika.BasicProperties(
+                    content_type=content_type,
+                    content_encoding=content_encoding,
+                    delivery_mode=delivery_mode,
+                    priority=priority,
+                    headers=headers or {},
+                    timestamp=int(time.time()),
+                )
+
+                self._msg_channel.basic_publish(
+                    exchange=exchange_name,
+                    routing_key=final_routing_key,
+                    body=payload.encode() if isinstance(payload, str) else payload,
+                    properties=properties,
+                )
+
+                if target_type == "queue":
+                    return 1
+
+                if exchange_name:
+                    q_result = self._mgmt_request_get_queue_count()
+                    if q_result is not None:
+                        return max(1, q_result)
+                return 1
+            except Exception as e:
+                logger.error(f"Failed to publish message: {e}")
+                return None
+
+    def _mgmt_request_get_queue_count(self) -> Optional[int]:
+        vhost = self._get_vhost_encoded()
+        data = self._mgmt_request(f"/api/queues/{vhost}", timeout=5.0, retries=1)
+        if data is None:
+            return None
+        total = 0
+        for q in data:
+            total += q.get("messages", 0)
+        return total
+
+    def get_queue_messages(
+        self,
+        queue_name: str,
+        limit: int = 50,
+        requeue: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        path = f"/api/queues/{vhost}/{queue_encoded}"
+        queue_info = self._mgmt_request(path, timeout=5.0, retries=1)
+        total_messages = 0
+        if queue_info:
+            total_messages = queue_info.get("messages", 0)
+
+        if requeue:
+            body = {
+                "count": min(limit, total_messages) if total_messages > 0 else limit,
+                "requeue": True,
+                "encoding": "auto",
+                "truncate": 50000,
+            }
+            mgmt_path = f"/api/queues/{vhost}/{queue_encoded}/get"
+            raw_messages = self._mgmt_request_post_data(mgmt_path, body, timeout=10.0, retries=1)
+            if raw_messages is None:
+                return None
+            messages = []
+            for idx, msg in enumerate(raw_messages):
+                payload = msg.get("payload", "")
+                payload_bytes = len(payload.encode("utf-8")) if isinstance(payload, str) else len(payload)
+                props = msg.get("properties", {})
+                headers = props.get("headers", {}) or {}
+
+                messages.append({
+                    "id": f"{queue_name}-{idx}-{int(time.time() * 1000)}",
+                    "index": idx + 1,
+                    "payload": payload,
+                    "payload_bytes": payload_bytes,
+                    "headers": headers,
+                    "properties": {
+                        "content_type": props.get("content_type"),
+                        "content_encoding": props.get("content_encoding"),
+                        "delivery_mode": props.get("delivery_mode"),
+                        "priority": props.get("priority"),
+                        "correlation_id": props.get("correlation_id"),
+                        "reply_to": props.get("reply_to"),
+                        "expiration": props.get("expiration"),
+                        "message_id": props.get("message_id"),
+                        "timestamp": props.get("timestamp"),
+                        "type": props.get("type"),
+                        "user_id": props.get("user_id"),
+                        "app_id": props.get("app_id"),
+                        "cluster_id": props.get("cluster_id"),
+                    },
+                    "exchange": msg.get("exchange", ""),
+                    "routing_key": msg.get("routing_key", ""),
+                    "redelivered": bool(msg.get("redelivered", False)),
+                    "delivery_tag": idx + 1,
+                    "vhost": self._config.get("rabbitmq_vhost", "/"),
+                })
+            return {
+                "success": True,
+                "messages": messages,
+                "total": total_messages,
+                "queue": queue_name,
+                "mode": "requeue",
+            }
+        else:
+            with self._lock:
+                if not self._ensure_msg_channel():
+                    return None
+
+                self._nack_all_unacked()
+                self._msg_current_queue = queue_name
+
+                messages = []
+                for i in range(limit):
+                    try:
+                        method, properties, body = self._msg_channel.basic_get(
+                            queue=queue_name,
+                            auto_ack=False,
+                        )
+                        if method is None:
+                            break
+
+                        delivery_tag = method.delivery_tag
+                        payload = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+                        payload_bytes = len(payload.encode("utf-8"))
+                        headers = dict(properties.headers) if properties.headers else {}
+
+                        msg_info = {
+                            "id": f"{queue_name}-{delivery_tag}-{int(time.time() * 1000)}",
+                            "index": len(messages) + 1,
+                            "payload": payload,
+                            "payload_bytes": payload_bytes,
+                            "headers": headers,
+                            "properties": {
+                                "content_type": properties.content_type,
+                                "content_encoding": properties.content_encoding,
+                                "delivery_mode": properties.delivery_mode,
+                                "priority": properties.priority,
+                                "correlation_id": properties.correlation_id,
+                                "reply_to": properties.reply_to,
+                                "expiration": properties.expiration,
+                                "message_id": properties.message_id,
+                                "timestamp": properties.timestamp,
+                                "type": properties.type,
+                                "user_id": properties.user_id,
+                                "app_id": properties.app_id,
+                                "cluster_id": properties.cluster_id,
+                            },
+                            "exchange": method.exchange,
+                            "routing_key": method.routing_key,
+                            "redelivered": method.redelivered,
+                            "delivery_tag": delivery_tag,
+                            "vhost": self._config.get("rabbitmq_vhost", "/"),
+                        }
+                        messages.append(msg_info)
+                        self._unacked_messages[delivery_tag] = msg_info
+                    except Exception as e:
+                        logger.debug(f"Failed to get message {i}: {e}")
+                        break
+
+                return {
+                    "success": True,
+                    "messages": messages,
+                    "total": total_messages,
+                    "queue": queue_name,
+                    "mode": "no-requeue",
+                }
+
+    def ack_message(self, queue_name: str, delivery_tag: int) -> bool:
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return False
+            try:
+                if self._msg_current_queue != queue_name:
+                    logger.warning(f"ACK queue mismatch: expected {self._msg_current_queue}, got {queue_name}")
+                    return False
+                self._msg_channel.basic_ack(delivery_tag=delivery_tag)
+                if delivery_tag in self._unacked_messages:
+                    del self._unacked_messages[delivery_tag]
+                return True
+            except Exception as e:
+                logger.error(f"Failed to ack message {delivery_tag}: {e}")
+                return False
+
+    def reject_message(self, queue_name: str, delivery_tag: int, requeue: bool = False) -> bool:
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return False
+            try:
+                if self._msg_current_queue != queue_name:
+                    logger.warning(f"Reject queue mismatch: expected {self._msg_current_queue}, got {queue_name}")
+                    return False
+                self._msg_channel.basic_reject(
+                    delivery_tag=delivery_tag,
+                    requeue=requeue,
+                )
+                if delivery_tag in self._unacked_messages:
+                    del self._unacked_messages[delivery_tag]
+                return True
+            except Exception as e:
+                logger.error(f"Failed to reject message {delivery_tag}: {e}")
                 return False
 
 

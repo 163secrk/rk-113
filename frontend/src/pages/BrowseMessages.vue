@@ -137,7 +137,7 @@ async function loadMessages(force = false) {
   }
   loadingMessages.value = true
   try {
-    const data = await getQueueMessages(selectedQueue.value, fetchLimit.value, true)
+    const data = await getQueueMessages(selectedQueue.value, fetchLimit.value, false)
     messages.value = data.messages
     totalMessages.value = data.total
     lastUpdated.value = new Date()
@@ -554,7 +554,7 @@ onActivated(() => {
           </span>
           <span class="flex items-center gap-1">
             <Info class="w-3 h-3" />
-            消息列表采用 get + requeue 模式，不会移除队列中的消息
+            消息获取后处于未确认状态，刷新或切换队列将自动退回
           </span>
         </div>
       </div>

@@ -167,3 +167,68 @@ class CreateBindingRequest(BaseModel):
     destination_type: Optional[str] = "queue"
     routing_key: Optional[str] = ""
     arguments: Optional[Dict[str, Any]] = None
+
+
+class PublishMessageRequest(BaseModel):
+    target_type: str
+    target_name: str
+    routing_key: Optional[str] = ""
+    payload: str
+    headers: Optional[Dict[str, str]] = None
+    content_encoding: Optional[str] = None
+    delivery_mode: Optional[int] = 2
+    priority: Optional[int] = 0
+    content_type: Optional[str] = "application/json"
+
+
+class PublishMessageResponse(BaseModel):
+    success: bool
+    message: str
+    published_count: Optional[int] = None
+
+
+class MessageProperties(BaseModel):
+    content_type: Optional[str] = None
+    content_encoding: Optional[str] = None
+    delivery_mode: Optional[int] = None
+    priority: Optional[int] = None
+    correlation_id: Optional[str] = None
+    reply_to: Optional[str] = None
+    expiration: Optional[str] = None
+    message_id: Optional[str] = None
+    timestamp: Optional[int] = None
+    type: Optional[str] = None
+    user_id: Optional[str] = None
+    app_id: Optional[str] = None
+    cluster_id: Optional[str] = None
+
+
+class MessageItem(BaseModel):
+    id: str
+    index: int
+    payload: str
+    payload_bytes: int
+    headers: Dict[str, Any]
+    properties: MessageProperties
+    exchange: str
+    routing_key: str
+    redelivered: bool
+    delivery_tag: int
+    vhost: str
+
+
+class QueueMessageListResponse(BaseModel):
+    success: bool
+    messages: List[MessageItem]
+    total: int
+    queue: str
+
+
+class MessageOperationRequest(BaseModel):
+    delivery_tag: int
+    requeue: Optional[bool] = False
+
+
+class MessageOperationResponse(BaseModel):
+    success: bool
+    message: str

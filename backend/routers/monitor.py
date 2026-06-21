@@ -14,6 +14,11 @@ from schemas import (
     ExchangeDetail,
     CreateExchangeRequest,
     CreateBindingRequest,
+    PublishMessageRequest,
+    PublishMessageResponse,
+    QueueMessageListResponse,
+    MessageOperationRequest,
+    MessageOperationResponse,
 )
 from services.rabbitmq_service import monitor
 from services import config_service
@@ -189,3 +194,108 @@ def delete_binding(
     if success:
         return {"success": True, "message": "Binding deleted successfully"}
     raise HTTPException(status_code=500, detail="Failed to delete binding")
+
+
+@router.post("/rabbitmq/messages/publish", response_model=PublishMessageResponse)
+def publish_message(request: PublishMessageRequest, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not request.target_type:
+        raise HTTPException(status_code=400, detail="target_type is required")
+    if request.target_type not in ("exchange", "queue"):
+        raise HTTPException(status_code=400, detail="target_type must be 'exchange' or 'queue'")
+    if not request.target_name:
+        raise HTTPException(status_code=400, detail="target_name is required")
+    if request.payload is None:
+        raise HTTPException(status_code=400, detail="payload is required")
+
+    count = monitor.publish_message(
+        target_type=request.target_type,
+        target_name=request.target_name,
+        routing_key=request.routing_key or "",
+        payload=request.payload,
+        headers=request.headers,
+        content_encoding=request.content_encoding,
+        delivery_mode=request.delivery_mode if request.delivery_mode is not None else 2,
+        priority=request.priority if request.priority is not None else 0,
+        content_type=request.content_type or "application/json",
+    )
+
+    if count is not None:
+        return {
+            "success": True,
+            "message": f"Message published to {request.target_type} '{request.target_name}' successfully",
+            "published_count": count,
+        }
+    raise HTTPException(status_code=500, detail=f"Failed to publish message to {request.target_type} '{request.target_name}'")
+
+
+@router.get("/rabbitmq/queues/{queue_name}/messages", response_model=QueueMessageListResponse)
+def get_queue_messages(
+    queue_name: str,
+    limit: int = 50,
+    requeue: bool = True,
+    db: Session = Depends(get_db),
+):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+    if limit <= 0:
+        raise HTTPException(status_code=400, detail="limit must be positive")
+    if limit > 500:
+        limit = 500
+
+    result = monitor.get_queue_messages(
+        queue_name=queue_name,
+        limit=limit,
+        requeue=requeue,
+    )
+
+    if result is not None:
+        return result
+    raise HTTPException(status_code=500, detail=f"Failed to get messages from queue '{queue_name}'")
+
+
+@router.post("/rabbitmq/queues/{queue_name}/messages/ack", response_model=MessageOperationResponse)
+def ack_message(queue_name: str, request: MessageOperationRequest, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+    if request.delivery_tag is None:
+        raise HTTPException(status_code=400, detail="delivery_tag is required")
+
+    success = monitor.ack_message(
+        queue_name=queue_name,
+        delivery_tag=request.delivery_tag,
+    )
+
+    if success:
+        return {"success": True, "message": f"Message with delivery_tag {request.delivery_tag} acknowledged successfully"}
+    raise HTTPException(status_code=500, detail=f"Failed to ack message with delivery_tag {request.delivery_tag}")
+
+
+@router.post("/rabbitmq/queues/{queue_name}/messages/reject", response_model=MessageOperationResponse)
+def reject_message(queue_name: str, request: MessageOperationRequest, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+    if request.delivery_tag is None:
+        raise HTTPException(status_code=400, detail="delivery_tag is required")
+
+    success = monitor.reject_message(
+        queue_name=queue_name,
+        delivery_tag=request.delivery_tag,
+        requeue=request.requeue if request.requeue is not None else False,
+    )
+
+    if success:
+        action = "requeued" if request.requeue else "discarded"
+        return {"success": True, "message": f"Message with delivery_tag {request.delivery_tag} rejected ({action}) successfully"}
+    raise HTTPException(status_code=500, detail=f"Failed to reject message with delivery_tag {request.delivery_tag}")
