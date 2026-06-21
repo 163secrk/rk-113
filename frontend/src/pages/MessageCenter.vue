@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Send, Eye, MessageSquare } from 'lucide-vue-next'
+import { Send, Eye, MessageSquare, Layers } from 'lucide-vue-next'
 import PublishMessage from './PublishMessage.vue'
 import BrowseMessages from './BrowseMessages.vue'
+import BulkOperations from './BulkOperations.vue'
 
 defineOptions({
   name: 'MessageCenter',
@@ -15,6 +16,7 @@ const router = useRouter()
 const tabs = [
   { name: 'publish', title: '发布消息', icon: Send },
   { name: 'browse', title: '消息浏览', icon: Eye },
+  { name: 'bulk', title: '批量操作', icon: Layers },
 ] as const
 
 type TabName = (typeof tabs)[number]['name']
@@ -23,7 +25,7 @@ const activeTab = ref<TabName>('publish')
 
 function syncFromRoute() {
   const hash = route.hash.replace('#', '')
-  if (hash === 'browse' || hash === 'publish') {
+  if (hash === 'browse' || hash === 'publish' || hash === 'bulk') {
     activeTab.value = hash as TabName
   }
 }
@@ -76,7 +78,8 @@ onMounted(() => {
 
     <transition name="fade-slide" mode="out-in">
       <PublishMessage v-if="activeTab === 'publish'" />
-      <BrowseMessages v-else />
+      <BrowseMessages v-else-if="activeTab === 'browse'" />
+      <BulkOperations v-else />
     </transition>
   </div>
 </template>

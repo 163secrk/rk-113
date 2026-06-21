@@ -1455,5 +1455,238 @@ class RabbitMQMonitor:
         url = f"/api/permissions/{vhost_encoded}/{user_encoded}"
         return self._mgmt_request_delete(url, timeout=6.0, retries=1)
 
+    def bulk_ack_messages(self, queue_name: str, delivery_tags: list[int]) -> Dict[str, Any]:
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return {
+                    "success": False,
+                    "message": "无法建立消息通道",
+                    "total": len(delivery_tags),
+                    "success_count": 0,
+                    "failed_count": len(delivery_tags),
+                    "failed_details": ["无法建立消息通道"],
+                }
+
+            if self._msg_current_queue != queue_name:
+                return {
+                    "success": False,
+                    "message": f"队列不匹配: 当前通道绑定的是 {self._msg_current_queue}",
+                    "total": len(delivery_tags),
+                    "success_count": 0,
+                    "failed_count": len(delivery_tags),
+                    "failed_details": [f"队列不匹配: 当前通道绑定的是 {self._msg_current_queue}"],
+                }
+
+            success_count = 0
+            failed_count = 0
+            failed_details = []
+
+            for tag in delivery_tags:
+                try:
+                    self._msg_channel.basic_ack(delivery_tag=tag)
+                    if tag in self._unacked_messages:
+                        del self._unacked_messages[tag]
+                    success_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    failed_details.append(f"delivery_tag={tag}: {str(e)}")
+                    logger.debug(f"Failed to ack message {tag}: {e}")
+
+            return {
+                "success": failed_count == 0,
+                "message": f"批量 ACK 完成，成功 {success_count} 条，失败 {failed_count} 条",
+                "total": len(delivery_tags),
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "failed_details": failed_details[:10] if failed_details else None,
+            }
+
+    def bulk_reject_messages(self, queue_name: str, delivery_tags: list[int], requeue: bool = False) -> Dict[str, Any]:
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return {
+                    "success": False,
+                    "message": "无法建立消息通道",
+                    "total": len(delivery_tags),
+                    "success_count": 0,
+                    "failed_count": len(delivery_tags),
+                    "failed_details": ["无法建立消息通道"],
+                }
+
+            if self._msg_current_queue != queue_name:
+                return {
+                    "success": False,
+                    "message": f"队列不匹配: 当前通道绑定的是 {self._msg_current_queue}",
+                    "total": len(delivery_tags),
+                    "success_count": 0,
+                    "failed_count": len(delivery_tags),
+                    "failed_details": [f"队列不匹配: 当前通道绑定的是 {self._msg_current_queue}"],
+                }
+
+            success_count = 0
+            failed_count = 0
+            failed_details = []
+
+            for tag in delivery_tags:
+                try:
+                    self._msg_channel.basic_reject(delivery_tag=tag, requeue=requeue)
+                    if tag in self._unacked_messages:
+                        del self._unacked_messages[tag]
+                    success_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    failed_details.append(f"delivery_tag={tag}: {str(e)}")
+                    logger.debug(f"Failed to reject message {tag}: {e}")
+
+            action = "重新入队" if requeue else "丢弃"
+            return {
+                "success": failed_count == 0,
+                "message": f"批量 Reject ({action}) 完成，成功 {success_count} 条，失败 {failed_count} 条",
+                "total": len(delivery_tags),
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "failed_details": failed_details[:10] if failed_details else None,
+            }
+
+    def bulk_publish_messages(
+        self,
+        target_type: str,
+        target_name: str,
+        default_routing_key: str,
+        messages: list[Dict[str, Any]],
+        delivery_mode: int = 2,
+        priority: int = 0,
+        content_type: str = "application/json",
+    ) -> Dict[str, Any]:
+        with self._lock:
+            if not self._ensure_msg_channel():
+                return {
+                    "success": False,
+                    "message": "无法建立消息通道",
+                    "total": len(messages),
+                    "success_count": 0,
+                    "failed_count": len(messages),
+                    "failed_details": ["无法建立消息通道"],
+                }
+
+            success_count = 0
+            failed_count = 0
+            failed_details = []
+
+            for idx, msg in enumerate(messages):
+                try:
+                    if target_type == "queue":
+                        exchange_name = ""
+                        final_routing_key = target_name
+                    else:
+                        exchange_name = target_name
+                        final_routing_key = msg.get("routing_key") or default_routing_key or ""
+
+                    headers = msg.get("headers") or {}
+                    payload = msg.get("payload", "")
+
+                    properties = pika.BasicProperties(
+                        content_type=content_type,
+                        delivery_mode=delivery_mode,
+                        priority=priority,
+                        headers=headers,
+                        timestamp=int(time.time()),
+                    )
+
+                    self._msg_channel.basic_publish(
+                        exchange=exchange_name,
+                        routing_key=final_routing_key,
+                        body=payload.encode() if isinstance(payload, str) else payload,
+                        properties=properties,
+                    )
+                    success_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    failed_details.append(f"第 {idx + 1} 条: {str(e)}")
+                    logger.debug(f"Failed to publish bulk message {idx}: {e}")
+
+            return {
+                "success": failed_count == 0,
+                "message": f"批量发布完成，成功 {success_count} 条，失败 {failed_count} 条",
+                "total": len(messages),
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "failed_details": failed_details[:20] if failed_details else None,
+            }
+
+    def get_all_queue_messages(self, queue_name: str) -> Optional[Dict[str, Any]]:
+        vhost = self._get_vhost_encoded()
+        queue_encoded = quote(queue_name, safe="")
+        path = f"/api/queues/{vhost}/{queue_encoded}"
+        queue_info = self._mgmt_request(path, timeout=5.0, retries=1)
+        total_messages = 0
+        if queue_info:
+            total_messages = queue_info.get("messages_ready", 0)
+
+        if total_messages == 0:
+            return {
+                "success": True,
+                "message": "队列为空",
+                "messages": [],
+                "total": 0,
+            }
+
+        limit = min(total_messages, 5000)
+        body = {
+            "count": limit,
+            "requeue": True,
+            "encoding": "auto",
+            "truncate": 500000,
+        }
+        mgmt_path = f"/api/queues/{vhost}/{queue_encoded}/get"
+        raw_messages = self._mgmt_request_post_data(mgmt_path, body, timeout=30.0, retries=1)
+
+        if raw_messages is None:
+            return None
+
+        messages = []
+        for idx, msg in enumerate(raw_messages):
+            payload = msg.get("payload", "")
+            payload_bytes = len(payload.encode("utf-8")) if isinstance(payload, str) else len(payload)
+            props = msg.get("properties", {})
+            headers = props.get("headers", {}) or {}
+            dead_letter = self._parse_dead_letter_info(headers)
+
+            messages.append({
+                "id": f"{queue_name}-{idx}-{int(time.time() * 1000)}",
+                "index": idx + 1,
+                "payload": payload,
+                "payload_bytes": payload_bytes,
+                "headers": headers,
+                "properties": {
+                    "content_type": props.get("content_type"),
+                    "content_encoding": props.get("content_encoding"),
+                    "delivery_mode": props.get("delivery_mode"),
+                    "priority": props.get("priority"),
+                    "correlation_id": props.get("correlation_id"),
+                    "reply_to": props.get("reply_to"),
+                    "expiration": props.get("expiration"),
+                    "message_id": props.get("message_id"),
+                    "timestamp": props.get("timestamp"),
+                    "type": props.get("type"),
+                    "user_id": props.get("user_id"),
+                    "app_id": props.get("app_id"),
+                    "cluster_id": props.get("cluster_id"),
+                },
+                "exchange": msg.get("exchange", ""),
+                "routing_key": msg.get("routing_key", ""),
+                "redelivered": bool(msg.get("redelivered", False)),
+                "delivery_tag": idx + 1,
+                "vhost": self._config.get("rabbitmq_vhost", "/"),
+                "dead_letter": dead_letter,
+            })
+
+        return {
+            "success": True,
+            "message": f"获取到 {len(messages)} 条消息",
+            "messages": messages,
+            "total": len(messages),
+        }
+
 
 monitor = RabbitMQMonitor()

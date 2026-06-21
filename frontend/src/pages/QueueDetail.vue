@@ -43,6 +43,7 @@ import {
   republishAllDeadLetters,
   checkQueueExists,
   isDeadLetterQueue,
+  exportQueueMessages,
   type QueueDetail,
   type MessageItem,
   type DeadLetterInfo,
@@ -73,6 +74,7 @@ const viewMode = ref<'formatted' | 'raw'>('formatted')
 const selectedMessage = ref<MessageItem | null>(null)
 
 const republishingAll = ref(false)
+const exportingAll = ref(false)
 
 const queueName = computed(() => {
   const name = route.params.name as string
@@ -417,6 +419,47 @@ async function handleRepublishAll() {
   }
 }
 
+async function handleExportAll() {
+  if (!queueDetail.value || queueDetail.value.ready === 0) {
+    ElMessage.warning('队列中没有 Ready 消息可导出')
+    return
+  }
+  try {
+    exportingAll.value = true
+    const result = await exportQueueMessages(queueName.value)
+    if (result.success && result.messages) {
+      const exportData = result.messages.map((m) => ({
+        index: m.index,
+        delivery_tag: m.delivery_tag,
+        payload: m.payload,
+        exchange: m.exchange,
+        routing_key: m.routing_key,
+        headers: m.headers,
+        properties: m.properties,
+        redelivered: m.redelivered,
+        vhost: m.vhost,
+      }))
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `queue_${queueName.value}_messages_${Date.now()}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      ElMessage.success(`已导出 ${exportData.length} 条消息`)
+    } else {
+      ElMessage.error(result.message || '导出失败')
+    }
+  } catch (err) {
+    console.error('Export all error:', err)
+    ElMessage.error('导出消息失败')
+  } finally {
+    exportingAll.value = false
+  }
+}
+
 function formatNumber(n: number): string {
   return n.toLocaleString('zh-CN')
 }
@@ -524,6 +567,14 @@ onBeforeUnmount(() => {
         >
           <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
           刷新
+        </button>
+        <button
+          class="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-400 text-sm font-medium hover:bg-blue-500/25 transition-all duration-200"
+          :disabled="exportingAll || !queueDetail || queueDetail.ready === 0"
+          @click="handleExportAll"
+        >
+          <Download class="w-4 h-4" :class="{ 'animate-spin': exportingAll }" />
+          {{ exportingAll ? '导出中...' : '导出全部消息' }}
         </button>
         <button
           v-if="isDLQ"

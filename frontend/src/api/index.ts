@@ -409,6 +409,71 @@ export function isDeadLetterQueue(queueName: string): boolean {
   return nameLower.includes('dlq') || nameLower.includes('dead-letter') || nameLower.includes('dead_letter')
 }
 
+export interface BulkMessageOperationRequest {
+  delivery_tags: number[]
+}
+
+export interface BulkMessageOperationResponse {
+  success: boolean
+  message: string
+  total: number
+  success_count: number
+  failed_count: number
+  failed_details?: string[]
+}
+
+export interface BulkPublishItem {
+  payload: string
+  headers?: Record<string, string>
+  routing_key?: string
+}
+
+export interface BulkPublishRequest {
+  target_type: 'exchange' | 'queue'
+  target_name: string
+  routing_key?: string
+  messages: BulkPublishItem[]
+  delivery_mode?: 1 | 2
+  priority?: number
+  content_type?: string
+}
+
+export interface BulkPublishResponse {
+  success: boolean
+  message: string
+  total: number
+  success_count: number
+  failed_count: number
+  failed_details?: string[]
+}
+
+export interface ExportMessagesResponse {
+  success: boolean
+  message: string
+  messages: MessageItem[]
+  total: number
+}
+
+export const bulkAckMessages = (queueName: string, deliveryTags: number[]) =>
+  api.post<unknown, BulkMessageOperationResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/bulk-ack`,
+    { delivery_tags: deliveryTags }
+  )
+
+export const bulkRejectMessages = (queueName: string, deliveryTags: number[], requeue = false) =>
+  api.post<unknown, BulkMessageOperationResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/bulk-reject?requeue=${requeue}`,
+    { delivery_tags: deliveryTags }
+  )
+
+export const bulkPublishMessages = (data: BulkPublishRequest) =>
+  api.post<unknown, BulkPublishResponse>('/rabbitmq/messages/bulk-publish', data)
+
+export const exportQueueMessages = (queueName: string) =>
+  api.get<unknown, ExportMessagesResponse>(
+    `/rabbitmq/queues/${encodeURIComponent(queueName)}/messages/export`
+  )
+
 export interface AuditLogItem {
   id: number
   operation_type: string

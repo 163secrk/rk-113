@@ -437,3 +437,48 @@ class AlertListResponse(BaseModel):
 
 class AlertEvaluateRequest(BaseModel):
     queues: List[Dict[str, Any]]
+
+
+class BulkMessageOperationRequest(BaseModel):
+    delivery_tags: List[int]
+
+
+class BulkMessageOperationResponse(BaseModel):
+    success: bool
+    message: str
+    total: int
+    success_count: int
+    failed_count: int
+    failed_details: Optional[List[str]] = None
+
+
+class BulkPublishItem(BaseModel):
+    payload: str
+    headers: Optional[Dict[str, str]] = None
+    routing_key: Optional[str] = None
+
+
+class BulkPublishRequest(BaseModel):
+    target_type: str
+    target_name: str
+    routing_key: Optional[str] = ""
+    messages: List[BulkPublishItem]
+    delivery_mode: Optional[int] = 2
+    priority: Optional[int] = 0
+    content_type: Optional[str] = "application/json"
+
+
+class BulkPublishResponse(BaseModel):
+    success: bool
+    message: str
+    total: int
+    success_count: int
+    failed_count: int
+    failed_details: Optional[List[str]] = None
+
+
+class ExportMessagesResponse(BaseModel):
+    success: bool
+    message: str
+    messages: List[MessageItem]
+    total: int

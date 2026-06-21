@@ -27,6 +27,8 @@ import {
   getQueueMessages,
   ackMessage,
   rejectMessage,
+  bulkAckMessages,
+  bulkRejectMessages,
   type QueueListItem,
   type MessageItem,
 } from '@/api'
@@ -53,6 +55,15 @@ const selectedMessage = ref<MessageItem | null>(null)
 
 const searchedPayload = ref('')
 const filterMode = ref<'all' | 'with_headers' | 'redelivered'>('all')
+
+const selectedDeliveryTags = ref<number[]>([])
+const isAllSelected = computed(() => {
+  return filteredMessages.value.length > 0 && filteredMessages.value.every((m) => selectedDeliveryTags.value.includes(m.delivery_tag))
+})
+const isIndeterminate = computed(() => {
+  const selectedInFiltered = filteredMessages.value.filter((m) => selectedDeliveryTags.value.includes(m.delivery_tag)).length
+  return selectedInFiltered > 0 && selectedInFiltered < filteredMessages.value.length
+})
 
 const filteredMessages = computed(() => {
   let result = messages.value
@@ -229,6 +240,125 @@ function downloadPayload(msg: MessageItem) {
   ElMessage.success('已开始下载')
 }
 
+function toggleSelectAll() {
+  if (isAllSelected.value) {
+    selectedDeliveryTags.value = selectedDeliveryTags.value.filter(
+      (tag) => !filteredMessages.value.some((m) => m.delivery_tag === tag)
+    )
+  } else {
+    const filteredTags = filteredMessages.value.map((m) => m.delivery_tag)
+    const newTags = [...new Set([...selectedDeliveryTags.value, ...filteredTags])]
+    selectedDeliveryTags.value = newTags
+  }
+}
+
+function toggleSelectOne(deliveryTag: number) {
+  const idx = selectedDeliveryTags.value.indexOf(deliveryTag)
+  if (idx >= 0) {
+    selectedDeliveryTags.value.splice(idx, 1)
+  } else {
+    selectedDeliveryTags.value.push(deliveryTag)
+  }
+}
+
+function clearSelection() {
+  selectedDeliveryTags.value = []
+}
+
+async function handleBulkAck() {
+  if (selectedDeliveryTags.value.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确认 ACK 选中的 ${selectedDeliveryTags.value.length} 条消息?\n\n此操作将从队列中永久移除这些消息，且无法恢复！`,
+      '批量确认消费 (ACK)',
+      {
+        confirmButtonText: '确认 ACK',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--primary',
+      }
+    )
+    const result = await bulkAckMessages(selectedQueue.value, selectedDeliveryTags.value)
+    if (result.success) {
+      ElMessage.success(`批量 ACK 完成：成功 ${result.success_count} 条，失败 ${result.failed_count} 条`)
+    } else {
+      ElMessage.error(result.message || '批量 ACK 失败')
+    }
+    messages.value = messages.value.filter((m) => !selectedDeliveryTags.value.includes(m.delivery_tag))
+    totalMessages.value = Math.max(0, totalMessages.value - (result?.success_count ?? selectedDeliveryTags.value.length))
+    clearSelection()
+    if (detailDialogVisible.value && selectedMessage.value && selectedDeliveryTags.value.includes(selectedMessage.value.delivery_tag)) {
+      closeDetail()
+    }
+  } catch {
+  }
+}
+
+async function handleBulkReject(requeue = false) {
+  if (selectedDeliveryTags.value.length === 0) return
+  const actionLabel = requeue ? '重新入队' : '丢弃'
+  try {
+    await ElMessageBox.confirm(
+      `确认 Reject 选中的 ${selectedDeliveryTags.value.length} 条消息 (${actionLabel})?\n\n${requeue
+        ? '此操作会将消息重新放回队列头部。'
+        : '此操作将从队列中永久丢弃这些消息，且无法恢复！'
+      }`,
+      `批量拒绝 (Reject - ${actionLabel})`,
+      {
+        confirmButtonText: `确认 Reject`,
+        cancelButtonText: '取消',
+        type: requeue ? 'info' : 'error',
+        confirmButtonClass: requeue ? '' : 'el-button--danger',
+      }
+    )
+    const result = await bulkRejectMessages(selectedQueue.value, selectedDeliveryTags.value, requeue)
+    if (result.success) {
+      ElMessage.success(`批量 Reject 完成：成功 ${result.success_count} 条，失败 ${result.failed_count} 条`)
+    } else {
+      ElMessage.error(result.message || '批量 Reject 失败')
+    }
+    messages.value = messages.value.filter((m) => !selectedDeliveryTags.value.includes(m.delivery_tag))
+    if (!requeue) {
+      totalMessages.value = Math.max(0, totalMessages.value - (result?.success_count ?? selectedDeliveryTags.value.length))
+    }
+    clearSelection()
+    if (detailDialogVisible.value && selectedMessage.value && selectedDeliveryTags.value.includes(selectedMessage.value.delivery_tag)) {
+      closeDetail()
+    }
+  } catch {
+  }
+}
+
+function handleBulkExport() {
+  if (selectedDeliveryTags.value.length === 0) return
+  const selectedMsgs = messages.value.filter((m) => selectedDeliveryTags.value.includes(m.delivery_tag))
+  if (selectedMsgs.length === 0) {
+    ElMessage.warning('没有可导出的消息')
+    return
+  }
+  const exportData = selectedMsgs.map((m) => ({
+    index: m.index,
+    delivery_tag: m.delivery_tag,
+    payload: m.payload,
+    exchange: m.exchange,
+    routing_key: m.routing_key,
+    headers: m.headers,
+    properties: m.properties,
+    redelivered: m.redelivered,
+    vhost: m.vhost,
+  }))
+  const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `messages_${selectedQueue.value || 'export'}_${Date.now()}.json`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  ElMessage.success(`已导出 ${selectedMsgs.length} 条消息`)
+}
+
 onMounted(() => {
   loadQueues()
 })
@@ -385,10 +515,64 @@ onActivated(() => {
       </div>
 
       <div v-else class="card-gradient rounded-2xl border border-ops-border overflow-hidden">
+        <div v-if="selectedDeliveryTags.length > 0" class="px-5 py-3 border-b border-ops-border bg-ops-primary/5 flex items-center justify-between flex-wrap gap-3">
+          <div class="flex items-center gap-2 text-sm">
+            <span class="text-ops-muted">已选择</span>
+            <span class="inline-flex items-center justify-center min-w-[2rem] h-7 px-2 rounded-md bg-ops-primary/15 text-ops-primary font-semibold stat-number">
+              {{ selectedDeliveryTags.length }}
+            </span>
+            <span class="text-ops-muted">条消息</span>
+            <button
+              class="ml-2 text-xs text-ops-muted hover:text-ops-text underline underline-offset-2 transition-colors"
+              @click="clearSelection"
+            >
+              清除选择
+            </button>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs text-emerald-400 hover:bg-emerald-500/25 transition-all duration-200"
+              @click="handleBulkAck"
+            >
+              <CheckCircle class="w-3.5 h-3.5" />
+              批量 ACK
+            </button>
+            <button
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/15 border border-red-500/30 text-xs text-red-400 hover:bg-red-500/25 transition-all duration-200"
+              @click="handleBulkReject(false)"
+            >
+              <XCircle class="w-3.5 h-3.5" />
+              批量丢弃
+            </button>
+            <button
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-xs text-amber-400 hover:bg-amber-500/25 transition-all duration-200"
+              @click="handleBulkReject(true)"
+            >
+              <XCircle class="w-3.5 h-3.5" />
+              批量重新入队
+            </button>
+            <button
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/15 border border-blue-500/30 text-xs text-blue-400 hover:bg-blue-500/25 transition-all duration-200"
+              @click="handleBulkExport"
+            >
+              <Download class="w-3.5 h-3.5" />
+              批量导出 JSON
+            </button>
+          </div>
+        </div>
         <div class="overflow-x-auto">
           <table class="w-full">
             <thead>
               <tr class="border-b border-ops-border">
+                <th class="text-left px-5 py-3.5 text-sm font-medium text-ops-muted w-12">
+                  <input
+                    type="checkbox"
+                    :checked="isAllSelected"
+                    :indeterminate="isIndeterminate"
+                    class="w-4 h-4 rounded border-ops-border bg-ops-bg text-ops-primary cursor-pointer"
+                    @change="toggleSelectAll"
+                  />
+                </th>
                 <th class="text-left px-5 py-3.5 text-sm font-medium text-ops-muted w-16">
                   <div class="flex items-center gap-1.5">
                     <ListOrdered class="w-3.5 h-3.5" />
@@ -432,7 +616,17 @@ onActivated(() => {
                 v-for="msg in filteredMessages"
                 :key="msg.id + '-' + msg.delivery_tag"
                 class="border-b border-ops-border/50 hover:bg-ops-card/30 transition-colors duration-150"
+                :class="{ 'bg-ops-primary/5': selectedDeliveryTags.includes(msg.delivery_tag) }"
               >
+                <td class="px-5 py-4">
+                  <input
+                    type="checkbox"
+                    :value="msg.delivery_tag"
+                    :checked="selectedDeliveryTags.includes(msg.delivery_tag)"
+                    class="w-4 h-4 rounded border-ops-border bg-ops-bg text-ops-primary cursor-pointer"
+                    @change="toggleSelectOne(msg.delivery_tag)"
+                  />
+                </td>
                 <td class="px-5 py-4">
                   <div class="flex flex-col items-start gap-1">
                     <span class="inline-flex items-center justify-center min-w-[2rem] h-7 px-2 rounded-md bg-ops-primary/10 text-ops-primary text-sm font-mono font-semibold stat-number">

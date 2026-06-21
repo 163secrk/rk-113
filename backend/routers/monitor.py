@@ -30,6 +30,11 @@ from schemas import (
     CreateVHostRequest,
     SetVHostPermissionRequest,
     DeleteVHostPermissionRequest,
+    BulkMessageOperationRequest,
+    BulkMessageOperationResponse,
+    BulkPublishRequest,
+    BulkPublishResponse,
+    ExportMessagesResponse,
 )
 from services.rabbitmq_service import monitor
 from services import config_service
@@ -404,6 +409,132 @@ def reject_message(queue_name: str, request: MessageOperationRequest, db: Sessio
             error_message=f"Failed to reject message with delivery_tag {request.delivery_tag}",
         )
     raise HTTPException(status_code=500, detail=f"Failed to reject message with delivery_tag {request.delivery_tag}")
+
+
+@router.post("/rabbitmq/queues/{queue_name}/messages/bulk-ack", response_model=BulkMessageOperationResponse)
+def bulk_ack_messages(queue_name: str, request: BulkMessageOperationRequest, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+    if not request.delivery_tags or len(request.delivery_tags) == 0:
+        raise HTTPException(status_code=400, detail="delivery_tags is required and must not be empty")
+
+    result = monitor.bulk_ack_messages(
+        queue_name=queue_name,
+        delivery_tags=request.delivery_tags,
+    )
+
+    if result is not None:
+        for tag in request.delivery_tags:
+            audit_service.create_audit_log(
+                db=db,
+                operation_type="ack",
+                operator="web-user",
+                queue_name=queue_name,
+                delivery_tag=tag,
+                status="success",
+            )
+        return result
+    raise HTTPException(status_code=500, detail="Failed to bulk ack messages")
+
+
+@router.post("/rabbitmq/queues/{queue_name}/messages/bulk-reject", response_model=BulkMessageOperationResponse)
+def bulk_reject_messages(
+    queue_name: str,
+    request: BulkMessageOperationRequest,
+    requeue: bool = False,
+    db: Session = Depends(get_db),
+):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+    if not request.delivery_tags or len(request.delivery_tags) == 0:
+        raise HTTPException(status_code=400, detail="delivery_tags is required and must not be empty")
+
+    result = monitor.bulk_reject_messages(
+        queue_name=queue_name,
+        delivery_tags=request.delivery_tags,
+        requeue=requeue,
+    )
+
+    if result is not None:
+        for tag in request.delivery_tags:
+            audit_service.create_audit_log(
+                db=db,
+                operation_type="reject",
+                operator="web-user",
+                queue_name=queue_name,
+                delivery_tag=tag,
+                status="success",
+                error_message=f"reject action: {'requeued' if requeue else 'discarded'}",
+            )
+        return result
+    raise HTTPException(status_code=500, detail="Failed to bulk reject messages")
+
+
+@router.post("/rabbitmq/messages/bulk-publish", response_model=BulkPublishResponse)
+def bulk_publish_messages(request: BulkPublishRequest, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not request.target_type:
+        raise HTTPException(status_code=400, detail="target_type is required")
+    if request.target_type not in ("exchange", "queue"):
+        raise HTTPException(status_code=400, detail="target_type must be 'exchange' or 'queue'")
+    if not request.target_name:
+        raise HTTPException(status_code=400, detail="target_name is required")
+    if not request.messages or len(request.messages) == 0:
+        raise HTTPException(status_code=400, detail="messages is required and must not be empty")
+
+    messages_list = [m.model_dump() for m in request.messages]
+
+    result = monitor.bulk_publish_messages(
+        target_type=request.target_type,
+        target_name=request.target_name,
+        default_routing_key=request.routing_key or "",
+        messages=messages_list,
+        delivery_mode=request.delivery_mode if request.delivery_mode is not None else 2,
+        priority=request.priority if request.priority is not None else 0,
+        content_type=request.content_type or "application/json",
+    )
+
+    if result is not None:
+        exchange_name = request.target_name if request.target_type == "exchange" else ""
+        queue_name = request.target_name if request.target_type == "queue" else None
+
+        for msg in request.messages[:100]:
+            audit_service.create_audit_log(
+                db=db,
+                operation_type="publish",
+                operator="web-user",
+                target_exchange=exchange_name or None,
+                routing_key=msg.routing_key or request.routing_key,
+                queue_name=queue_name,
+                message_body=msg.payload,
+                headers=msg.headers,
+                status="success",
+            )
+        return result
+    raise HTTPException(status_code=500, detail="Failed to bulk publish messages")
+
+
+@router.get("/rabbitmq/queues/{queue_name}/messages/export", response_model=ExportMessagesResponse)
+def export_queue_messages(queue_name: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+
+    if not queue_name:
+        raise HTTPException(status_code=400, detail="queue_name is required")
+
+    result = monitor.get_all_queue_messages(queue_name=queue_name)
+
+    if result is not None:
+        return result
+    raise HTTPException(status_code=500, detail=f"Failed to export messages from queue '{queue_name}'")
 
 
 @router.get("/rabbitmq/queues/{queue_name}/exists", response_model=CheckQueueExistsResponse)
