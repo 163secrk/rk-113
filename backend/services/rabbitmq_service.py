@@ -1307,5 +1307,153 @@ class RabbitMQMonitor:
             "topic_permissions": topic_permissions_list,
         }
 
+    def list_vhosts(self) -> Optional[list[Dict[str, Any]]]:
+        data = self._mgmt_request("/api/vhosts", timeout=8.0, retries=1)
+        if data is None:
+            return None
+
+        result = []
+        for v in data:
+            vhost_name = v.get("name", "/")
+            vhost_encoded = "%2F" if vhost_name == "/" else quote(vhost_name, safe="")
+
+            queues_data = self._mgmt_request(f"/api/queues/{vhost_encoded}", timeout=3.0, retries=0)
+            exchanges_data = self._mgmt_request(f"/api/exchanges/{vhost_encoded}", timeout=3.0, retries=0)
+            connections_data = self._mgmt_request(f"/api/vhosts/{vhost_encoded}/connections", timeout=3.0, retries=0)
+
+            queue_count = len(queues_data) if queues_data else 0
+            exchange_count = len(exchanges_data) if exchanges_data else 0
+            connection_count = len(connections_data) if connections_data else 0
+
+            message_count = 0
+            if queues_data:
+                for q in queues_data:
+                    message_count += q.get("messages", 0)
+
+            result.append({
+                "name": vhost_name,
+                "queues": queue_count,
+                "exchanges": exchange_count,
+                "connections": connection_count,
+                "messages": message_count,
+            })
+        return result
+
+    def create_vhost(self, vhost_name: str) -> bool:
+        vhost_encoded = "%2F" if vhost_name == "/" else quote(vhost_name, safe="")
+        url = f"/api/vhosts/{vhost_encoded}"
+        return self._mgmt_request_put(url, {}, timeout=6.0, retries=1)
+
+    def delete_vhost(self, vhost_name: str) -> bool:
+        vhost_encoded = "%2F" if vhost_name == "/" else quote(vhost_name, safe="")
+        url = f"/api/vhosts/{vhost_encoded}"
+        return self._mgmt_request_delete(url, timeout=6.0, retries=1)
+
+    def get_vhost_detail(self, vhost_name: str) -> Optional[Dict[str, Any]]:
+        vhost_encoded = "%2F" if vhost_name == "/" else quote(vhost_name, safe="")
+
+        def _fetch(path: str) -> Optional[Any]:
+            return self._mgmt_request(path, timeout=6.0, retries=1)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_path = {
+                executor.submit(_fetch, f"/api/queues/{vhost_encoded}"): "queues",
+                executor.submit(_fetch, f"/api/exchanges/{vhost_encoded}"): "exchanges",
+                executor.submit(_fetch, f"/api/vhosts/{vhost_encoded}/permissions"): "permissions",
+            }
+            results: Dict[str, Any] = {}
+            try:
+                for future in as_completed(future_to_path, timeout=15.0):
+                    path_key = future_to_path[future]
+                    try:
+                        results[path_key] = future.result()
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch {path_key}: {e}")
+                        results[path_key] = None
+            except TimeoutError:
+                logger.debug(f"Timeout fetching vhost detail for {vhost_name}, returning partial data")
+                for path_key, future in future_to_path.items():
+                    if path_key not in results:
+                        if future.done():
+                            try:
+                                results[path_key] = future.result()
+                            except Exception:
+                                results[path_key] = None
+                        else:
+                            results[path_key] = None
+                            future.cancel()
+
+        queues_list = []
+        raw_queues = results.get("queues")
+        if raw_queues and isinstance(raw_queues, list):
+            for q in raw_queues:
+                messages_ready = q.get("messages_ready", 0)
+                messages_unacknowledged = q.get("messages_unacknowledged", 0)
+                messages_total = q.get("messages", 0)
+                consumers = q.get("consumers", 0)
+                status = "running" if consumers > 0 or messages_unacknowledged > 0 else "idle"
+                queues_list.append({
+                    "name": q.get("name", ""),
+                    "ready": messages_ready,
+                    "unacked": messages_unacknowledged,
+                    "total": messages_total,
+                    "consumers": consumers,
+                    "status": status,
+                    "vhost": q.get("vhost", "/"),
+                    "durable": q.get("durable", False),
+                    "auto_delete": q.get("auto_delete", False),
+                    "exclusive": q.get("exclusive", False),
+                    "node": q.get("node", ""),
+                })
+
+        exchanges_list = []
+        raw_exchanges = results.get("exchanges")
+        if raw_exchanges and isinstance(raw_exchanges, list):
+            for e in raw_exchanges:
+                exchanges_list.append({
+                    "name": e.get("name", ""),
+                    "vhost": e.get("vhost", "/"),
+                    "type": e.get("type", "direct"),
+                    "durable": e.get("durable", False),
+                    "auto_delete": e.get("auto_delete", False),
+                    "internal": e.get("internal", False),
+                })
+
+        permissions_list = []
+        raw_permissions = results.get("permissions")
+        if raw_permissions and isinstance(raw_permissions, list):
+            for p in raw_permissions:
+                permissions_list.append({
+                    "vhost": p.get("vhost", "/"),
+                    "user": p.get("user", ""),
+                    "configure": p.get("configure", ""),
+                    "write": p.get("write", ""),
+                    "read": p.get("read", ""),
+                })
+
+        return {
+            "name": vhost_name,
+            "queues": queues_list,
+            "exchanges": exchanges_list,
+            "permissions": permissions_list,
+        }
+
+    def set_vhost_permission(self, vhost_name: str, username: str, configure: str = ".*", write: str = ".*", read: str = ".*") -> bool:
+        vhost_encoded = "%2F" if vhost_name == "/" else quote(vhost_name, safe="")
+        user_encoded = quote(username, safe="")
+        url = f"/api/permissions/{vhost_encoded}/{user_encoded}"
+        body = {
+            "configure": configure,
+            "write": write,
+            "read": read,
+        }
+        return self._mgmt_request_put(url, body, timeout=6.0, retries=1)
+
+    def delete_vhost_permission(self, vhost_name: str, username: str) -> bool:
+        vhost_encoded = "%2F" if vhost_name == "/" else quote(vhost_name, safe="")
+        user_encoded = quote(username, safe="")
+        url = f"/api/permissions/{vhost_encoded}/{user_encoded}"
+        return self._mgmt_request_delete(url, timeout=6.0, retries=1)
+
 
 monitor = RabbitMQMonitor()

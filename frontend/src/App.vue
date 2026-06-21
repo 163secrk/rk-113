@@ -13,6 +13,7 @@ import {
   Link2,
   Users,
   Bell,
+  Layers,
 } from 'lucide-vue-next'
 import { getConnectionStatus, type ConnectionStatus } from '@/api'
 import { useAlertStore } from '@/stores/alert'
@@ -26,6 +27,7 @@ const menuItems = [
   { path: '/dashboard', title: 'Dashboard', icon: Gauge },
   { path: '/queues', title: '队列管理', icon: List },
   { path: '/exchanges', title: '交换机管理', icon: Share2 },
+  { path: '/vhosts', title: '虚拟主机', icon: Layers },
   { path: '/messages', title: '消息中心', icon: MessageSquare },
   { path: '/audit', title: '消息审计', icon: FileText },
   { path: '/connections', title: '连接管理', icon: Link2 },
@@ -176,7 +178,7 @@ onBeforeUnmount(() => {
 
       <main class="flex-1 overflow-auto bg-grid p-6 animate-fade-in">
         <router-view v-slot="{ Component }">
-          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'MessageCenter', 'MessageAudit', 'PublishMessage', 'BrowseMessages', 'ConnectionList', 'UserList', 'AlertCenter']">
+          <keep-alive :include="['QueueList', 'QueueDetail', 'ExchangeList', 'ExchangeDetail', 'VHostList', 'VHostDetail', 'MessageCenter', 'MessageAudit', 'PublishMessage', 'BrowseMessages', 'ConnectionList', 'UserList', 'AlertCenter']">
             <component :is="Component" />
           </keep-alive>
         </router-view>

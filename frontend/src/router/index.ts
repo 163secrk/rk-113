@@ -5,6 +5,8 @@ import QueueList from '@/pages/QueueList.vue'
 import QueueDetail from '@/pages/QueueDetail.vue'
 import ExchangeList from '@/pages/ExchangeList.vue'
 import ExchangeDetail from '@/pages/ExchangeDetail.vue'
+import VHostList from '@/pages/VHostList.vue'
+import VHostDetail from '@/pages/VHostDetail.vue'
 import MessageCenter from '@/pages/MessageCenter.vue'
 import MessageAudit from '@/pages/MessageAudit.vue'
 import ConnectionList from '@/pages/ConnectionList.vue'
@@ -45,6 +47,18 @@ const routes: RouteRecordRaw[] = [
     name: 'ExchangeDetail',
     component: ExchangeDetail,
     meta: { title: '交换机详情', icon: 'Share2', featureName: '交换机管理', hideInMenu: true },
+  },
+  {
+    path: '/vhosts',
+    name: 'VHosts',
+    component: VHostList,
+    meta: { title: '虚拟主机', icon: 'Layers', featureName: '虚拟主机' },
+  },
+  {
+    path: '/vhosts/:name',
+    name: 'VHostDetail',
+    component: VHostDetail,
+    meta: { title: '虚拟主机详情', icon: 'Layers', featureName: '虚拟主机', hideInMenu: true },
   },
   {
     path: '/messages',

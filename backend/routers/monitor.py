@@ -25,6 +25,11 @@ from schemas import (
     ConnectionListItem,
     UserListItem,
     UserDetail,
+    VHostListItem,
+    VHostDetail,
+    CreateVHostRequest,
+    SetVHostPermissionRequest,
+    DeleteVHostPermissionRequest,
 )
 from services.rabbitmq_service import monitor
 from services import config_service
@@ -492,3 +497,85 @@ def get_user_detail(username: str, db: Session = Depends(get_db)):
     if detail is None:
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
     return detail
+
+
+@router.get("/rabbitmq/vhosts", response_model=list[VHostListItem])
+def list_vhosts(db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    vhosts = monitor.list_vhosts()
+    if vhosts is None:
+        raise HTTPException(status_code=500, detail="Failed to fetch vhosts from RabbitMQ")
+    return vhosts
+
+
+@router.get("/rabbitmq/vhosts/{vhost_name}", response_model=VHostDetail)
+def get_vhost(vhost_name: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    if not vhost_name:
+        raise HTTPException(status_code=400, detail="vhost_name is required")
+    detail = monitor.get_vhost_detail(vhost_name)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"VHost '{vhost_name}' not found")
+    return detail
+
+
+@router.post("/rabbitmq/vhosts", response_model=OperationResponse)
+def create_vhost(request: CreateVHostRequest, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    if not request.name:
+        raise HTTPException(status_code=400, detail="VHost name is required")
+    success = monitor.create_vhost(request.name)
+    if success:
+        return {"success": True, "message": f"VHost '{request.name}' created successfully"}
+    raise HTTPException(status_code=500, detail=f"Failed to create VHost '{request.name}'")
+
+
+@router.delete("/rabbitmq/vhosts/{vhost_name}", response_model=OperationResponse)
+def delete_vhost(vhost_name: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    if not vhost_name:
+        raise HTTPException(status_code=400, detail="vhost_name is required")
+    if vhost_name == "/":
+        raise HTTPException(status_code=400, detail="Cannot delete default VHost '/'")
+    success = monitor.delete_vhost(vhost_name)
+    if success:
+        return {"success": True, "message": f"VHost '{vhost_name}' deleted successfully"}
+    raise HTTPException(status_code=500, detail=f"Failed to delete VHost '{vhost_name}'")
+
+
+@router.put("/rabbitmq/vhosts/{vhost_name}/permissions", response_model=OperationResponse)
+def set_vhost_permission(vhost_name: str, request: SetVHostPermissionRequest, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    if not vhost_name:
+        raise HTTPException(status_code=400, detail="vhost_name is required")
+    if not request.username:
+        raise HTTPException(status_code=400, detail="username is required")
+    success = monitor.set_vhost_permission(
+        vhost_name=vhost_name,
+        username=request.username,
+        configure=request.configure,
+        write=request.write,
+        read=request.read,
+    )
+    if success:
+        return {"success": True, "message": f"Permissions set for user '{request.username}' on VHost '{vhost_name}'"}
+    raise HTTPException(status_code=500, detail=f"Failed to set permissions for user '{request.username}' on VHost '{vhost_name}'")
+
+
+@router.delete("/rabbitmq/vhosts/{vhost_name}/permissions", response_model=OperationResponse)
+def delete_vhost_permission(vhost_name: str, username: str, db: Session = Depends(get_db)):
+    cfg = config_service.get_rabbitmq_config(db)
+    monitor.set_config(cfg)
+    if not vhost_name:
+        raise HTTPException(status_code=400, detail="vhost_name is required")
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+    success = monitor.delete_vhost_permission(vhost_name, username)
+    if success:
+        return {"success": True, "message": f"Permissions deleted for user '{username}' on VHost '{vhost_name}'"}
+    raise HTTPException(status_code=500, detail=f"Failed to delete permissions for user '{username}' on VHost '{vhost_name}'")

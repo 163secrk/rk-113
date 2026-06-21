@@ -529,6 +529,63 @@ export const getUsers = () =>
 export const getUserDetail = (username: string) =>
   api.get<unknown, UserDetail>(`/rabbitmq/users/${encodeURIComponent(username)}`)
 
+export interface VHostListItem {
+  name: string
+  queues: number
+  exchanges: number
+  connections: number
+  messages: number
+}
+
+export interface VHostDetail {
+  name: string
+  queues: QueueListItem[]
+  exchanges: ExchangeListItem[]
+  permissions: VHostPermission[]
+}
+
+export interface VHostPermission {
+  vhost: string
+  user: string
+  configure: string
+  write: string
+  read: string
+}
+
+export interface CreateVHostRequest {
+  name: string
+}
+
+export interface SetVHostPermissionRequest {
+  username: string
+  configure?: string
+  write?: string
+  read?: string
+}
+
+export const getVHosts = () =>
+  api.get<unknown, VHostListItem[]>('/rabbitmq/vhosts')
+
+export const getVHostDetail = (vhostName: string) =>
+  api.get<unknown, VHostDetail>(`/rabbitmq/vhosts/${encodeURIComponent(vhostName)}`)
+
+export const createVHost = (data: CreateVHostRequest) =>
+  api.post<unknown, OperationResponse>('/rabbitmq/vhosts', data)
+
+export const deleteVHost = (vhostName: string) =>
+  api.delete<unknown, OperationResponse>(`/rabbitmq/vhosts/${encodeURIComponent(vhostName)}`)
+
+export const setVHostPermission = (vhostName: string, data: SetVHostPermissionRequest) =>
+  api.put<unknown, OperationResponse>(`/rabbitmq/vhosts/${encodeURIComponent(vhostName)}/permissions`, data)
+
+export const deleteVHostPermission = (vhostName: string, username: string) => {
+  const params = new URLSearchParams()
+  params.append('username', username)
+  return api.delete<unknown, OperationResponse>(
+    `/rabbitmq/vhosts/${encodeURIComponent(vhostName)}/permissions?${params.toString()}`
+  )
+}
+
 export type AlertConditionType = 'ready_gt' | 'unacked_gt' | 'consumers_eq_0' | 'rate_gt'
 export type AlertLevel = 'warning' | 'critical'
 export type AlertStatus = 'active' | 'acknowledged' | 'resolved' | 'closed'

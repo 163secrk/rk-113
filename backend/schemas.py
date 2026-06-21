@@ -340,6 +340,36 @@ class UserDetail(BaseModel):
     topic_permissions: List[UserTopicPermission] = []
 
 
+class VHostListItem(BaseModel):
+    name: str
+    queues: int
+    exchanges: int
+    connections: int
+    messages: int
+
+
+class VHostDetail(BaseModel):
+    name: str
+    queues: List[QueueListItem] = []
+    exchanges: List[ExchangeListItem] = []
+    permissions: List[UserPermission] = []
+
+
+class CreateVHostRequest(BaseModel):
+    name: str
+
+
+class SetVHostPermissionRequest(BaseModel):
+    username: str
+    configure: str = ".*"
+    write: str = ".*"
+    read: str = ".*"
+
+
+class DeleteVHostPermissionRequest(BaseModel):
+    username: str
+
+
 class AlertRuleBase(BaseModel):
     name: str
     queue_name: str
